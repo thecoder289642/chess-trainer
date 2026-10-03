@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Opening Trainer</title>
+<meta name="description" content="Practise chess openings against popular moves from Lichess, Masters, or your own games.">
+<meta name="theme-color" content="#16181d">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Openings">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><img src="icons/icon-192.png" alt=""><span>Opening Trainer</span></div>
+  <nav class="srcs" aria-label="Opponent move source">
+    <button data-src="lichess">Lichess</button>
+    <button data-src="masters">Masters</button>
+    <button data-src="mine">My games</button>
+    <button data-src="rep">Repertoire</button>
+  </nav>
+  <button class="icon" id="setBtn" aria-label="Settings" title="Settings">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+
+<main class="layout">
+  <section class="boardcol">
+    <div id="status" class="status"></div>
+    <div class="boardwrap">
+      <div class="evalbar" title="Engine evaluation"><div id="evalfill" class="evalfill"></div><span id="evaltxt" class="evaltxt">0.0</span></div>
+      <div class="board-outer"><div id="board" class="brown cburnett"></div></div>
+    </div>
+    <div class="controls">
+      <div class="seg3" role="group" aria-label="Your colour">
+        <button data-color="white">White</button><button data-color="black">Black</button><button data-color="random">Random</button>
+      </div>
+      <button class="btn" id="undoBtn" title="Take back (←)">Undo</button>
+      <button class="btn" id="flipBtn" title="Flip board">Flip</button>
+      <button class="btn primary" id="newBtn" title="New game (n)">New game</button>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="card drillcard">
+      <div><div class="label">Drill</div><div id="drillName" class="drillname">Free play</div></div>
+      <button class="btn small" id="drillBtn">Pick opening</button>
+    </div>
+    <div class="card">
+      <div id="opening" class="opening">Starting position</div>
+      <div id="statsHead" class="label"></div>
+      <div id="stats"></div>
+    </div>
+    <div id="warn" class="warn" hidden></div>
+    <div class="card">
+      <div class="label">Moves</div>
+      <div id="moves" class="moves"></div>
+    </div>
+  </aside>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<dialog id="drill" class="dlg">
+  <div class="dlghead"><h2>Drill an opening</h2><button class="icon" id="closeDrill" aria-label="Close">✕</button></div>
+  <input id="drillSearch" type="search" placeholder="Search openings…">
+  <div id="drillList" class="dlist"></div>
+</dialog>
+
+<dialog id="settings" class="dlg">
+  <div class="dlghead"><h2>Settings</h2><button class="icon" id="closeSettings" aria-label="Close">✕</button></div>
+
+  <section>
+    <h3>Lichess token</h3>
+    <p class="muted">Needed for live Lichess &amp; Masters data. Create one at lichess.org/account/oauth/token with <b>no permissions ticked</b>. It's saved only in this browser and only sent to Lichess.</p>
+    <input id="tokenIn" type="password" autocomplete="off" placeholder="lip_…">
+  </section>
+
+  <section>
+    <h3>Lichess opponents' rating</h3>
+    <div class="chips">
+      <button data-rating="0">&lt;1000</button><button data-rating="1000">1000</button><button data-rating="1200">1200</button><button data-rating="1400">1400</button><button data-rating="1600">1600</button><button data-rating="1800">1800</button><button data-rating="2000">2000</button><button data-rating="2200">2200</button><button data-rating="2500">2500+</button>
+    </div>
+    <h3>Time controls</h3>
+    <div class="chips">
+      <button data-speed="bullet">Bullet</button><button data-speed="blitz">Blitz</button><button data-speed="rapid">Rapid</button><button data-speed="classical">Classical</button>
+    </div>
+  </section>
+
+  <section>
+    <h3>Engine</h3>
+    <label class="row">Strength after book: <b id="eloOut">1500</b></label>
+    <input id="eloIn" type="range" min="1320" max="2800" step="20">
+    <label class="row"><input type="checkbox" id="afterBook"> Engine keeps playing when the book runs out</label>
+  </section>
+
+  <section>
+    <h3>Training</h3>
+    <label class="row"><input type="checkbox" id="flagIn"> Flag rare, weak and losing moves</label>
+    <label class="row"><input type="checkbox" id="hideIn"> Hide move stats on my turn (test yourself)</label>
+    <label class="row"><input type="checkbox" id="soundIn"> Move sounds</label>
+  </section>
+
+  <section>
+    <h3>My repertoire (PGN)</h3>
+    <p class="muted">Paste a PGN (Lichess study export, Chessable, etc.). Variations are included. In <b>Repertoire</b> mode the opponent only plays moves from it and you're warned when you leave it.</p>
+    <textarea id="repIn" rows="5" placeholder="1. e4 e5 2. Nf3 Nc6 (2... d6 3. d4) 3. Bc4 *"></textarea>
+    <div class="row gap"><button class="btn small primary" id="repLoad">Save repertoire</button><label class="btn small ghost filebtn">Load .pgn file<input type="file" id="repFile" accept=".pgn,text/plain" hidden></label><button class="btn small ghost" id="repClear">Clear</button></div>
+    <p id="repStatus" class="muted"></p>
+  </section>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
