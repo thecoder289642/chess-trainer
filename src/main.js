@@ -4,7 +4,7 @@ import { parse as parsePgn } from '@mliebelt/pgn-parser';
 import { OPENINGS } from './openings.js';
 import { Engine } from './engine.js';
 import { LESSONS } from './lessons.js';
-import { CoachChat, describeError } from './ai.js';
+import { classify, explainMove, findMoves, winPct } from './explain.js';
 import { CATALOG, TAG_GROUPS, WHITE_DEFENSES } from './catalog.js';
 import { emptyDoc, findOrCreateGist, mergeDocs, readGist, writeGist } from './sync.js';
 import { buildTrees, fetchChessCom, fetchLichess, gamesFromPgnText, guessPgnPlayer } from './games.js';
@@ -13,7 +13,7 @@ import { buildTrees, fetchChessCom, fetchLichess, gamesFromPgnText, guessPgnPlay
 const DEFAULTS = {
   source: 'lichess', ratings: [1200, 1400, 1600], speeds: ['blitz', 'rapid', 'classical'],
   token: '', engineElo: 1500, engineAfterBook: true, flagMoves: true, hideStatsMyTurn: false, showEval: false, mode: 'overview', chesscomUser: '', lichessUser: '',
-  colorPref: 'white', sound: true, coach: true, aiKey: '', syncToken: '', syncGist: '',
+  colorPref: 'white', sound: true, coach: true, syncToken: '', syncGist: '',
 };
 const store = {
   get(k, d) { try { const v = localStorage.getItem('ot.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -583,7 +583,7 @@ function buildRepTree(pgnText) {
 // ---------- settings dialog ----------
 function openSettings() {
   const d = $('#settings');
-  $('#tokenIn').value = S.token; $('#aiKeyIn').value = S.aiKey || ''; $('#syncIn').value = S.syncToken || ''; renderSyncStatus();
+  $('#tokenIn').value = S.token; $('#syncIn').value = S.syncToken || ''; renderSyncStatus();
   $('#ccIn').value = S.chesscomUser || ''; $('#liIn').value = S.lichessUser || '';
   $('#gamesStatus').textContent = gamesMeta ? `${gamesMeta.count} games (${gamesMeta.who}), updated ${new Date(gamesMeta.updated).toLocaleDateString()}` : 'No games loaded yet.';
   $('#eloIn').value = S.engineElo; $('#eloOut').textContent = eloText(S.engineElo); $('#coachSet').checked = S.coach;
@@ -612,7 +612,6 @@ function initSettings() {
   $('#gamesLoad').addEventListener('click', () => { S.chesscomUser = $('#ccIn').value.trim(); S.lichessUser = $('#liIn').value.trim(); saveSettings(); importGames(); });
   $('#gamesFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (f) importPgnGames(await f.text()); e.target.value = ''; });
   $('#tokenIn').addEventListener('change', (e) => { S.token = e.target.value.trim(); saveSettings(); cache.clear(); });
-  $('#aiKeyIn').addEventListener('change', (e) => { S.aiKey = e.target.value.trim(); saveSettings(); });
   $('#eloIn').addEventListener('input', (e) => { setElo(+e.target.value); $('#eloOut').textContent = eloText(S.engineElo); });
   $('#coachSet').addEventListener('change', (e) => { S.coach = e.target.checked; saveSettings(); });
   $('#afterBook').addEventListener('change', (e) => { S.engineAfterBook = e.target.checked; saveSettings(); });
@@ -919,70 +918,35 @@ function renderLesson(box, o) {
 }
 
 
-// ---------- Ask why (Claude) ----------
-// A chat under the lesson: questions go to Claude with the position, the course line and
-// Stockfish's view; Claude checks lines with the local engine and returns lines to watch.
-let ask = null; // { L, chat, items: [{ role, text, lines, pending, error }], busy, draft, focused }
+// ---------- Explain a move (engine, no AI) ----------
+// Like chess.com's coach: type or tap a move and get Stockfish's verdict plus plain reasons
+// (material, hanging pieces, threats, development), with lines to watch on the board.
+let ask = null; // { L, items: [{ q, hist, results, note, error, pending }], busy, draft, focused }
 let preview = null; // { line: { label, moves }, token }
-const askState = (L) => (ask && ask.L === L ? ask : (ask = { L, chat: new CoachChat(), items: [], busy: false, draft: '', focused: false }));
-
-function askContext(L, o) {
-  const hist = game.history();
-  const line = o.lines[L.idx];
-  const E = lessonEngine.get(game.fen());
-  const myTurn = !L.done && sideOf(game.fen()) === userColor;
-  return [
-    `Opening course: ${o.name}. The student plays ${o.side}.`,
-    `Line being studied: ${line.name}: ${pgnText(line.moves)}`,
-    line.note ? `Course note for this line: ${line.note}` : '',
-    `Moves played so far: ${hist.length ? pgnText(hist.join(' ')) : '(starting position)'} (for tools: "${hist.join(' ')}")`,
-    myTurn ? `It is the student's move; the course move here is ${expectedMove().san}.` : '',
-    E?.top.length ? `Stockfish's top moves in this position: ${E.top.map((t) => `${t.san} ${evalText(t.cp)}`).join(', ')}.` : '',
-  ].filter(Boolean).join('\n');
-}
-
-// Replays SAN moves from the start; tolerates move numbers. Throws a readable error on an illegal move.
-function replaySans(text) {
-  const sans = text.trim().split(/\s+/).filter((t) => t && !/^\d+\.+$/.test(t)).map((t) => t.replace(/^\d+\.+/, ''));
-  const c = new Chess();
-  sans.forEach((m, i) => { try { c.move(m); } catch { throw new Error(`Illegal move "${m}" at ply ${i + 1} (after: ${sans.slice(0, i).join(' ') || 'the start'}).`); } });
-  return { c, sans: c.history() };
-}
-
-async function askRunTool(name, input, item) {
-  const { c, sans } = replaySans(input.moves);
-  if (name === 'show_line') {
-    if (!sans.length) throw new Error('The line has no moves.');
-    item.lines.push({ label: input.label.slice(0, 60), moves: sans });
-    renderAll();
-    return `Shown to the student as a button labelled "${input.label}".`;
-  }
-  if (c.isGameOver()) return JSON.stringify({ result: c.isCheckmate() ? `checkmate, ${sideOf(c.fen()) === 'white' ? 'Black' : 'White'} won` : 'draw' });
-  const top = await engine.topMoves(c.fen(), { depth: 15, n: input.lines || 3 });
-  return JSON.stringify({
-    side_to_move: sideOf(c.fen()),
-    candidates: top.map((t) => {
-      const pc = new Chess(c.fen()); const pv = [];
-      for (const u of t.pv.slice(0, 10)) { try { pv.push(pc.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } }
-      return { move: pv[0] || t.uci, eval_white_pov: t.mate !== null ? `mate in ${Math.abs(t.mate)} for ${t.mate > 0 ? 'White' : 'Black'}` : evalText(t.cp), line: sanLine(pv, sans.length) };
-    }),
-  });
-}
+const askState = (L) => (ask && ask.L === L ? ask : (ask = { L, items: [], busy: false, draft: '', focused: false }));
+const analyseForExplain = (fen, n) => engine.topMoves(fen, { depth: 14, n });
+const sentence = (s) => s[0].toUpperCase() + s.slice(1) + '.';
 
 async function askSend(L, o, q) {
   const A = askState(L);
   q = q.trim();
-  if (!q || A.busy || !S.aiKey) return;
+  if (!q || A.busy) return;
+  const fen = game.fen();
+  let sans = findMoves(fen, q).slice(0, 2);
+  let note = '';
+  if (!sans.length) {
+    const myTurn = !L.done && sideOf(fen) === userColor;
+    const fallback = myTurn ? expectedMove().san : lessonEngine.get(fen)?.top[0]?.san;
+    if (!fallback) { A.items.push({ q, hist: game.history(), results: [], note: 'I couldn’t find a legal move in that. Try something like “Nxd4” or “Bc4 vs Nxd4”.' }); renderAll(); return; }
+    sans = [fallback];
+    note = `No move named, so here’s ${myTurn ? 'the course move' : 'the engine’s choice'}.`;
+  }
   A.busy = true; A.draft = '';
-  A.items.push({ role: 'user', text: q });
-  const item = { role: 'assistant', text: '', lines: [], pending: true };
+  const item = { q, hist: game.history(), results: [], note, pending: true };
   A.items.push(item);
   renderAll();
-  const show = (t) => { item.text = t; const n = document.querySelector(`[data-ask="${A.items.indexOf(item)}"]`); if (n) n.textContent = t; };
-  try {
-    const r = await A.chat.ask({ apiKey: S.aiKey, question: q, context: askContext(L, o), runTool: (n, i) => askRunTool(n, i, item), onText: show });
-    if (r.refused) item.text = (item.text ? item.text + '\n\n' : '') + 'Claude declined to answer this one.';
-  } catch (e) { item.error = true; item.text = describeError(e); }
+  try { for (const san of sans) item.results.push(await explainMove(fen, san, analyseForExplain)); }
+  catch { item.error = 'The engine couldn’t analyse this position.'; }
   item.pending = false; A.busy = false;
   if (lesson === L) renderAll();
 }
@@ -1007,41 +971,56 @@ function previewLine(ln) {
 }
 function endPreview() { preview = null; syncBoard(); drawLessonArrows(); renderAll(); }
 
+function explainResult(r, hist) {
+  const box = el('div', { class: 'xres cls-' + r.cls },
+    el('div', { class: 'ct' }, el('span', { class: 'cbadge' }, CLS[r.cls].sym || '✓'), `${r.label}${CLS[r.cls].sym}`, el('b', {}, CLS[r.cls].label)),
+    el('div', { class: 'muted' }, `Eval ${evalText(r.before)} → ${evalText(r.after)}`));
+  const reasons = r.reasons.length ? r.reasons : [r.cls === 'best' || r.cls === 'excellent' ? 'a sound move that keeps the balance' : 'nothing tactical, it just isn’t the most useful move here'];
+  box.append(el('ul', { class: 'xreasons' }, ...reasons.map((x) => el('li', {}, sentence(x)))));
+  if (r.bestSan) box.append(el('div', { class: 'xbetter' }, `Better was ${r.bestSan}`, r.bestReasons.length ? `: it ${r.bestReasons.join(' and ')}.` : '.'));
+  const lines = [{ label: `Line after ${r.san}`, moves: [...hist, ...r.line] }];
+  if (r.bestSan) lines.push({ label: `Best: ${r.bestSan}`, moves: [...hist, ...r.bestLine] });
+  box.append(el('div', { class: 'asklines' }, ...lines.map((ln) =>
+    el('button', { class: 'chip askline' + (preview?.line.label === ln.label && preview?.line.moves.join() === ln.moves.join() ? ' on' : ''), onclick: () => previewLine(ln), title: 'Play this line on the board' }, '▶ ' + ln.label))));
+  return box;
+}
+
 function askCard(L, o) {
   const A = askState(L);
-  const box = el('div', { class: 'askbox' }, el('div', { class: 'label' }, 'Ask why'));
-  if (!S.aiKey) {
-    box.append(el('div', { class: 'muted' }, 'Ask things like “why not Nxd4?” and Claude explains, checking with the engine and showing lines on the board. Add your Anthropic API key in Settings to turn it on.'),
-      el('button', { class: 'btn small', onclick: openSettings }, 'Open settings'));
-    return box;
-  }
+  const box = el('div', { class: 'askbox' }, el('div', { class: 'label' }, 'Explain a move'));
   if (preview) box.append(el('div', { class: 'lmsg info askprev' }, `Showing: ${preview.line.label}`, el('button', { class: 'btn small', onclick: endPreview }, 'Back to the lesson')));
   const list = el('div', { class: 'asklist' });
-  A.items.forEach((it, i) => {
-    if (it.role === 'user') { list.append(el('div', { class: 'askq' }, it.text)); return; }
-    const a = el('div', { class: 'aska' + (it.error ? ' err' : '') }, el('div', { class: 'askt', 'data-ask': i }, it.text || (it.pending ? 'Thinking…' : '')));
-    if (it.lines.length) a.append(el('div', { class: 'asklines' }, ...it.lines.map((ln) =>
-      el('button', { class: 'chip askline' + (preview?.line === ln ? ' on' : ''), onclick: () => previewLine(ln), title: 'Play this line on the board' }, '▶ ' + ln.label))));
-    list.append(a);
-  });
+  for (const it of A.items) {
+    list.append(el('div', { class: 'askq' }, it.q));
+    const a = el('div', { class: 'aska' + (it.error ? ' err' : '') });
+    if (it.note) a.append(el('div', { class: 'muted' }, it.note));
+    if (it.error) a.append(el('div', {}, it.error));
+    for (const r of it.results) a.append(explainResult(r, it.hist));
+    if (it.results.length === 2) {
+      const [x, y] = it.results; const s = x.mover === 'white' ? 1 : -1;
+      const diff = ((x.after - y.after) * s) / 100;
+      a.append(el('div', { class: 'xcompare' }, Math.abs(diff) < 0.15 ? `${x.san} and ${y.san} are about equal.` : `${diff > 0 ? x.san : y.san} is better by about ${Math.abs(diff).toFixed(1)}.`));
+    }
+    if (it.pending) a.append(el('div', { class: 'muted' }, 'Stockfish is checking…'));
+    if (a.childNodes.length) list.append(a);
+  }
   if (A.items.length) box.append(list);
   const E = lessonEngine.get(game.fen());
   const myTurn = !L.done && sideOf(game.fen()) === userColor;
   const sugg = [];
   if (myTurn && (L.kind === 'learn' || L.wrongHere > 0 || L.hinted)) {
     const exp = expectedMove().san;
-    sugg.push(`Why is ${exp} played here?`);
-    if (E?.top[0] && E.top[0].san !== exp) sugg.push(`Why does the engine prefer ${E.top[0].san}?`);
-  }
-  sugg.push('What’s the plan from here?');
-  if (!A.items.length) box.append(el('div', { class: 'chips asksugg' }, ...sugg.map((q) => el('button', { class: 'chip', disabled: A.busy ? '' : null, onclick: () => askSend(L, o, q) }, q))));
-  const input = el('input', { type: 'text', class: 'binput', placeholder: 'Why is this move better? What if I play…?', maxlength: '500', 'aria-label': 'Ask a question about this position' });
+    sugg.push([`Why ${exp}?`, exp]);
+    if (E?.top[0] && E.top[0].san !== exp) sugg.push([`${exp} vs ${E.top[0].san}`, `${exp} vs ${E.top[0].san}`]);
+  } else if (E?.top[0]) sugg.push([`Why ${E.top[0].san}?`, E.top[0].san]);
+  if (sugg.length && !A.items.length) box.append(el('div', { class: 'chips asksugg' }, ...sugg.map(([t, q]) => el('button', { class: 'chip', disabled: A.busy ? '' : null, onclick: () => askSend(L, o, q) }, t))));
+  const input = el('input', { type: 'text', class: 'binput', placeholder: 'Type a move, e.g. Nxd4 or “Bc4 vs Nxd4”', maxlength: '120', 'aria-label': 'Move to explain' });
   input.value = A.draft;
   input.addEventListener('input', (e) => { A.draft = e.target.value; });
   input.addEventListener('focus', () => { A.focused = true; });
   input.addEventListener('blur', () => { A.focused = false; });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') askSend(L, o, input.value); });
-  box.append(el('div', { class: 'askrow' }, input, el('button', { class: 'btn primary', disabled: A.busy ? '' : null, onclick: () => askSend(L, o, input.value) }, A.busy ? '…' : 'Ask')));
+  box.append(el('div', { class: 'askrow' }, input, el('button', { class: 'btn primary', disabled: A.busy ? '' : null, onclick: () => askSend(L, o, input.value) }, A.busy ? '…' : 'Explain')));
   if (A.focused) setTimeout(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
   return box;
 }
@@ -1584,16 +1563,8 @@ const CLS = {
   book: { label: 'Book move', sym: '' }, inaccuracy: { label: 'Inaccuracy', sym: '?!' }, mistake: { label: 'Mistake', sym: '?' }, blunder: { label: 'Blunder', sym: '??' },
 };
 const BAD = ['inaccuracy', 'mistake', 'blunder'];
-const winPct = (cp) => 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1); // Lichess's eval-to-win% curve
 const evalText = (cp) => (Math.abs(cp) >= 9000 ? (cp > 0 ? '+M' : '−M') : (cp >= 0 ? '+' : '') + (cp / 100).toFixed(1));
 const accuracy = (loss) => Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * loss) - 3.1669));
-// Win% the mover gave away (0–100) and its category; evals are from White's side.
-function classify(beforeCp, afterCp, mover, isBest) {
-  const s = mover === 'white' ? 1 : -1;
-  const loss = Math.max(0, winPct(beforeCp * s) - winPct(afterCp * s));
-  const cls = isBest ? 'best' : loss < 2 ? 'excellent' : loss < 6 ? 'good' : loss < 12 ? 'inaccuracy' : loss < 22 ? 'mistake' : 'blunder';
-  return { cls, loss };
-}
 
 // ---------- Live coach ----------
 // After each of your moves the engine judges it before the opponent replies. The verdict stays in

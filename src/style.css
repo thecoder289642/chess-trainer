@@ -337,3 +337,11 @@ select.binput.small { width: auto; margin: 0; padding: 6px 8px; }
 .dcard p { margin: 0; font-size: 14px; flex: 1; }
 .dcard .row.gap { margin: 0; }
 @media (max-width: 520px) { .modes button { padding: 7px 11px; } .brand span { display: none; } }
+
+/* Explain a move */
+.xres { border-left: 3px solid var(--c, var(--line)); padding-left: 10px; display: flex; flex-direction: column; gap: 4px; }
+.xres + .xres { margin-top: 6px; }
+.xreasons { margin: 2px 0; padding-left: 18px; }
+.xreasons li { margin: 2px 0; }
+.xbetter { color: var(--accent); }
+.xcompare { font-weight: 650; border-top: 1px solid var(--line); padding-top: 6px; }
