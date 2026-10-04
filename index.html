@@ -22,6 +22,7 @@
     <button data-mode="overview">Overview</button>
     <button data-mode="learn">Learn</button>
     <button data-mode="play">Play</button>
+    <button data-mode="openings">Openings</button>
   </nav>
   <button class="icon" id="setBtn" aria-label="Settings" title="Settings">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -77,6 +78,7 @@
     <div id="reviewPanel" class="stack" hidden></div>
     <div id="learnPanel" class="stack" hidden></div>
     <div id="overviewPanel" class="ovgrid" hidden></div>
+    <div id="openingsPanel" class="ovgrid" hidden></div>
     <div class="card" id="movesCard">
       <div class="label">Moves</div>
       <div id="moves" class="moves"></div>
@@ -100,6 +102,14 @@
     <div class="acct"><input id="ccIn" type="text" placeholder="chess.com username" autocomplete="off" autocapitalize="off" spellcheck="false"><input id="liIn" type="text" placeholder="Lichess username" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
     <div class="row gap"><button class="btn small primary" id="gamesLoad">Load / refresh my games</button><label class="btn small ghost filebtn">Import PGN of my games<input type="file" id="gamesFile" accept=".pgn,text/plain" hidden></label></div>
     <p class="muted importStatus" id="gamesStatus"></p>
+  </section>
+
+  <section>
+    <h3>Sync across devices</h3>
+    <p class="muted">Keeps your own courses, progress and settings the same on your laptop and phone, using one private GitHub Gist. Create a token at github.com/settings/personal-access-tokens/new with only <b>Account permissions → Gists: Read and write</b>, paste it here, then use the setup link on your phone. Tokens and API keys are never synced.</p>
+    <input id="syncIn" type="password" autocomplete="off" placeholder="github_pat_…" aria-label="GitHub sync token">
+    <div class="row gap"><button class="btn small primary" id="syncNowBtn">Sync now</button><button class="btn small ghost" id="syncLinkBtn">Copy phone setup link</button><button class="btn small ghost" id="syncOffBtn">Turn off</button></div>
+    <p class="muted" id="syncStatus"></p>
   </section>
 
   <section>

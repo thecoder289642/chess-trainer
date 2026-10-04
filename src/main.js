@@ -5,26 +5,42 @@ import { OPENINGS } from './openings.js';
 import { Engine } from './engine.js';
 import { LESSONS } from './lessons.js';
 import { CoachChat, describeError } from './ai.js';
+import { CATALOG, TAG_GROUPS, WHITE_DEFENSES } from './catalog.js';
+import { emptyDoc, findOrCreateGist, mergeDocs, readGist, writeGist } from './sync.js';
 import { buildTrees, fetchChessCom, fetchLichess, gamesFromPgnText, guessPgnPlayer } from './games.js';
 
 // ---------- settings ----------
 const DEFAULTS = {
   source: 'lichess', ratings: [1200, 1400, 1600], speeds: ['blitz', 'rapid', 'classical'],
   token: '', engineElo: 1500, engineAfterBook: true, flagMoves: true, hideStatsMyTurn: false, showEval: false, mode: 'overview', chesscomUser: '', lichessUser: '',
-  colorPref: 'white', sound: true, coach: true, aiKey: '',
+  colorPref: 'white', sound: true, coach: true, aiKey: '', syncToken: '', syncGist: '',
 };
 const store = {
   get(k, d) { try { const v = localStorage.getItem('ot.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('ot.' + k, JSON.stringify(v)); } catch {} },
 };
 const S = Object.assign({}, DEFAULTS, store.get('settings', {}));
-const saveSettings = () => store.set('settings', S);
+// Settings that follow you between devices (never tokens or keys).
+const SYNCED_SETTINGS = ['source', 'ratings', 'speeds', 'engineElo', 'engineAfterBook', 'flagMoves', 'hideStatsMyTurn', 'showEval', 'chesscomUser', 'lichessUser', 'colorPref', 'sound', 'coach'];
+const syncedSettings = () => Object.fromEntries(SYNCED_SETTINGS.map((k) => [k, S[k]]));
+let syncApplying = false;
+const saveSettings = () => {
+  store.set('settings', S);
+  const h = JSON.stringify(syncedSettings());
+  if (!syncApplying && h !== store.get('settingsHash', null)) { store.set('settingsHash', h); store.set('settingsT', Date.now()); scheduleSync(); }
+};
 
-// One-tap device setup: open the app with #token=lip_xxx once; it is saved locally and removed from the address bar.
-(function readTokenFromHash() {
+// One-tap device setup: open the app with #token=lip_xxx (Lichess) or #sync=<GitHub token> once;
+// it is saved locally and removed from the address bar.
+function readTokenFromHash() {
   const m = location.hash.match(/token=([A-Za-z0-9_]+)/);
-  if (m) { S.token = m[1]; saveSettings(); history.replaceState(null, '', location.pathname + location.search); }
-})();
+  const sy = location.hash.match(/sync=([A-Za-z0-9_]+)/);
+  if (m) { S.token = m[1]; store.set('settings', S); }
+  if (sy) { S.syncToken = sy[1]; S.syncGist = ''; store.set('settings', S); }
+  if (m || sy) history.replaceState(null, '', location.pathname + location.search);
+  return { lichess: !!m, sync: !!sy };
+}
+readTokenFromHash();
 
 const SOURCES = {
   lichess: { label: 'Lichess', short: 'Lichess players' },
@@ -59,6 +75,7 @@ let myTree = null;
 let repTree = store.get('repTree', null);
 let repInfo = store.get('repInfo', null);
 let customCourses = store.get('customCourses', []);
+let deletedCourses = store.get('deletedCourses', {});
 const courses = () => [...LESSONS, ...customCourses];
 const courseById = (id) => courses().find((x) => x.id === id);
 
@@ -505,9 +522,11 @@ function renderAll() {
   $('#reviewPanel').hidden = S.mode !== 'play' || !review;
   $('#learnPanel').hidden = S.mode !== 'learn';
   $('#overviewPanel').hidden = S.mode !== 'overview';
-  document.body.classList.toggle('mode-overview', S.mode === 'overview');
+  $('#openingsPanel').hidden = S.mode !== 'openings';
+  document.body.classList.toggle('mode-overview', S.mode === 'overview' || S.mode === 'openings');
   renderEval();
   if (S.mode === 'overview') { renderOverview(); return; }
+  if (S.mode === 'openings') { renderOpenings(); return; }
   if (S.mode === 'learn') { renderLearn(); renderMoves(); return; }
   if (review) { renderReview(); renderMoves(); return; }
   renderStatus(); renderMoves(); renderStats(); renderSourceTabs(); renderStrength(); renderCoach(); renderResult();
@@ -564,7 +583,7 @@ function buildRepTree(pgnText) {
 // ---------- settings dialog ----------
 function openSettings() {
   const d = $('#settings');
-  $('#tokenIn').value = S.token; $('#aiKeyIn').value = S.aiKey || '';
+  $('#tokenIn').value = S.token; $('#aiKeyIn').value = S.aiKey || ''; $('#syncIn').value = S.syncToken || ''; renderSyncStatus();
   $('#ccIn').value = S.chesscomUser || ''; $('#liIn').value = S.lichessUser || '';
   $('#gamesStatus').textContent = gamesMeta ? `${gamesMeta.count} games (${gamesMeta.who}), updated ${new Date(gamesMeta.updated).toLocaleDateString()}` : 'No games loaded yet.';
   $('#eloIn').value = S.engineElo; $('#eloOut').textContent = eloText(S.engineElo); $('#coachSet').checked = S.coach;
@@ -608,14 +627,14 @@ function initSettings() {
       const r = buildRepTree(txt);
       if (!r.positions) throw new Error('no moves found');
       repTree = r.tree; repInfo = { games: r.games, positions: r.positions };
-      store.set('repTree', repTree); store.set('repInfo', repInfo);
+      store.set('repTree', repTree); store.set('repInfo', repInfo); store.set('repT', Date.now()); scheduleSync();
       $('#repStatus').textContent = `Loaded: ${r.games} chapter(s), ${r.positions} positions`;
       $('#repIn').value = '';
       toast('Repertoire saved on this device');
     } catch (e) { $('#repStatus').textContent = 'Couldn\'t read that PGN: ' + e.message; }
   });
   $('#repFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (f) $('#repIn').value = await f.text(); });
-  $('#repClear').addEventListener('click', () => { repTree = null; repInfo = null; store.set('repTree', null); store.set('repInfo', null); $('#repStatus').textContent = 'No repertoire loaded'; });
+  $('#repClear').addEventListener('click', () => { repTree = null; repInfo = null; store.set('repTree', null); store.set('repInfo', null); store.set('repT', Date.now()); scheduleSync(); $('#repStatus').textContent = 'No repertoire loaded'; });
   $('#closeSettings').addEventListener('click', () => { d.close(); renderAll(); });
   d.addEventListener('close', () => renderAll());
 }
@@ -649,12 +668,12 @@ const lineMoves = (l) => l.moves.split(' ');
 const prog = (o, i) => ((progress[o.id] ||= {})[i] ||= { seen: false, clean: 0, tries: 0 });
 const mastered = (o, i) => prog(o, i).clean >= 1;
 const masteredCount = (o) => o.lines.filter((_, i) => mastered(o, i)).length;
-const saveProgress = () => store.set('progress', progress);
+const saveProgress = () => { store.set('progress', progress); scheduleSync(); };
 
 function setMode(m, initial) {
   preview = null; busy++; lesson = null; builder = null; review = null; coach = null; hideWarning(); cg.setAutoShapes([]);
   S.mode = m; saveSettings();
-  if (m === 'overview') { game = new Chess(); moveNotes = []; renderAll(); window.scrollTo(0, 0); return; }
+  if (m === 'overview' || m === 'openings') { game = new Chess(); moveNotes = []; renderAll(); window.scrollTo(0, 0); return; }
   if (m === 'learn') { learnView = { screen: 'home', id: null }; game = new Chess(); moveNotes = []; userColor = 'white'; syncBoard(); renderAll(); }
   else newGame({ drill });
 }
@@ -1031,16 +1050,16 @@ function askCard(L, o) {
 // Build your own course by playing moves for both sides. Saved in localStorage `ot.customCourses`
 // in the same shape as LESSONS, so Learn / Practice / reviews work on it unchanged.
 let builder = null; // { id, name, side, lines: [{ name, moves, note }], path: [san], sugg, auto, dirty }
-const saveCustom = () => store.set('customCourses', customCourses);
+const saveCustom = () => { store.set('customCourses', customCourses); store.set('deletedCourses', deletedCourses); scheduleSync(); };
 const plyLabel = (i, san) => `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'}${san}`;
 
-function openBuilder(id, copyFrom) {
+function openBuilder(id, copyFrom, start) {
   busy++; lesson = null; hideWarning();
   const o = id ? customCourses.find((c) => c.id === id) : copyFrom;
-  builder = { id: id || null, name: id ? o.name : copyFrom ? 'My ' + copyFrom.name : '', side: o ? o.side : 'white',
+  builder = { id: id || null, name: id ? o.name : copyFrom ? 'My ' + copyFrom.name : start ? 'My ' + start.name : '', side: o ? o.side : start ? start.side : 'white',
     lines: o ? o.lines.map((l) => ({ name: l.name, moves: l.moves, note: l.note || '' })) : [], path: [], sugg: null, auto: null, dirty: !!copyFrom };
   learnView = { screen: 'build', id: null };
-  builderGoto([]);
+  builderGoto(start ? start.path : []);
   window.scrollTo(0, 0);
 }
 
@@ -1207,7 +1226,7 @@ function builderSaveCourse() {
   if (!B.lines.length) { toast('Save at least one line first', 'warn'); return; }
   const id = B.id || 'my-' + Date.now().toString(36);
   const old = customCourses.find((c) => c.id === id);
-  const course = { id, name: (B.name || '').trim() || `My ${B.side} course`, side: B.side, tag: null, custom: true,
+  const course = { id, name: (B.name || '').trim() || `My ${B.side} course`, side: B.side, tag: null, custom: true, updated: Date.now(),
     blurb: `Your own course: ${B.lines.length} line${B.lines.length > 1 ? 's' : ''}.`, lines: B.lines };
   if (old && progress[id]) { // keep progress for lines that didn't change
     const np = {}; B.lines.forEach((l, i) => { const j = old.lines.findIndex((x) => x.moves === l.moves); if (j !== -1 && progress[id][j]) np[i] = progress[id][j]; });
@@ -1221,7 +1240,7 @@ function builderSaveCourse() {
 
 function deleteCourse(o) {
   if (!confirm(`Delete "${o.name}" and its progress?`)) return;
-  customCourses = customCourses.filter((c) => c.id !== o.id); saveCustom();
+  customCourses = customCourses.filter((c) => c.id !== o.id); deletedCourses[o.id] = Date.now(); saveCustom();
   delete progress[o.id]; saveProgress();
   learnView = { screen: 'home' }; renderAll();
 }
@@ -1377,7 +1396,7 @@ function coverFor(side) {
 }
 const COVER = {
   white: { label: 'When you play 1.e4, Black replies…', start: ['e4'], map: {
-    e5: ['scotch', 'scotch-gambit', 'italian'], c5: ['alapin'], e6: ['french-adv'], c6: ['caro-adv'], d5: ['scandi'], d6: ['vs-pirc'], g6: ['vs-pirc'], Nf6: ['alekhine'] },
+    e5: ['scotch', 'scotch-gambit', 'italian'], c5: ['alapin'], e6: ['french-adv'], c6: ['caro-adv', 'martian'], d5: ['scandi'], d6: ['vs-pirc'], g6: ['vs-pirc'], Nf6: ['alekhine'] },
     names: { e5: '1...e5 (Open Game)', c5: '1...c5 Sicilian', e6: '1...e6 French', c6: '1...c6 Caro-Kann', d5: '1...d5 Scandinavian', d6: '1...d6 Pirc', g6: '1...g6 Modern', Nf6: '1...Nf6 Alekhine', Nc6: '1...Nc6 Nimzowitsch', b6: '1...b6 Owen', f5: '1...f5', a6: '1...a6', h6: '1...h6', d6x: '' } },
   black: { label: 'As Black, White opens with…', start: [], map: {
     e4: ['pirc'], d4: ['kid'], c4: ['flank'], Nf3: ['flank'] },
@@ -1866,6 +1885,166 @@ function renderReview() {
   setStatusText(P ? `Move ${Math.floor(p / 2) + 1}: ${CLS[P.cls].label.toLowerCase()}` : 'Game review', P && P.mover === R.color ? 'you' : '');
 }
 
+// ---------- Device sync ----------
+// Courses, progress, settings and the repertoire live in one private gist (src/sync.js).
+// `var` so saveSettings can call scheduleSync before this section has run.
+var syncTimer = null, syncRun = null, syncAgain = false, syncReady = false, syncLastErr = '';
+var syncInfo = { state: 'off', msg: '' };
+function localDoc() {
+  return { v: 1, courses: customCourses, deleted: deletedCourses, progress, settings: syncedSettings(), settingsT: store.get('settingsT', 0),
+    rep: repTree ? { tree: repTree, info: repInfo } : null, repT: store.get('repT', 0) };
+}
+function applyDoc(d) {
+  syncApplying = true;
+  customCourses = d.courses; store.set('customCourses', customCourses);
+  deletedCourses = d.deleted; store.set('deletedCourses', deletedCourses);
+  progress = d.progress; store.set('progress', progress);
+  if (d.settings) {
+    Object.assign(S, d.settings); store.set('settings', S);
+    store.set('settingsT', d.settingsT); store.set('settingsHash', JSON.stringify(syncedSettings()));
+  }
+  repTree = d.rep?.tree || null; repInfo = d.rep?.info || null;
+  store.set('repTree', repTree); store.set('repInfo', repInfo); store.set('repT', d.repT);
+  syncApplying = false;
+}
+function scheduleSync() {
+  if (!syncReady || !S.syncToken || syncApplying) return;
+  clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), 3000);
+}
+function setSyncInfo(state, msg = '') { syncInfo = { state, msg }; renderSyncStatus(); }
+function renderSyncStatus() {
+  const e = $('#syncStatus'); if (!e) return;
+  const last = store.get('syncLast', 0);
+  e.textContent = !S.syncToken ? 'Sync is off.'
+    : syncInfo.state === 'syncing' ? 'Syncing…'
+    : syncInfo.state === 'error' ? 'Sync problem: ' + syncInfo.msg
+    : last ? `Synced ${new Date(last).toLocaleString()}` : 'Sync is on.';
+}
+async function syncNow({ manual = false } = {}) {
+  if (!S.syncToken) return;
+  if (syncRun) { syncAgain = true; return syncRun; }
+  syncRun = (async () => {
+    setSyncInfo('syncing');
+    try {
+      if (!S.syncGist) { S.syncGist = await findOrCreateGist(S.syncToken, localDoc()); store.set('settings', S); }
+      const remote = (await readGist(S.syncToken, S.syncGist)) || emptyDoc();
+      const merged = mergeDocs(remote, localDoc()); // remote first: the shared copy wins ties
+      const mj = JSON.stringify(merged);
+      if (mj !== JSON.stringify(mergeDocs(localDoc(), emptyDoc()))) { applyDoc(merged); if (!builder && !lesson && !review) renderAll(); }
+      if (mj !== JSON.stringify(mergeDocs(remote, emptyDoc()))) await writeGist(S.syncToken, S.syncGist, merged);
+      store.set('syncLast', Date.now()); syncLastErr = '';
+      setSyncInfo('idle');
+      if (manual) toast('Synced');
+    } catch (e) {
+      setSyncInfo('error', e.message);
+      if (manual || e.message !== syncLastErr) toast(e.message, 'warn');
+      syncLastErr = e.message;
+    } finally {
+      syncRun = null;
+      if (syncAgain) { syncAgain = false; scheduleSync(); }
+    }
+  })();
+  return syncRun;
+}
+function initSync() {
+  syncReady = true;
+  if (store.get('settingsHash', null) === null) { // first run with sync code: settings changed from the defaults count as real changes
+    store.set('settingsHash', JSON.stringify(syncedSettings()));
+    const defaults = Object.fromEntries(SYNCED_SETTINGS.map((k) => [k, DEFAULTS[k]]));
+    if (!store.get('settingsT', 0) && JSON.stringify(defaults) !== JSON.stringify(syncedSettings())) store.set('settingsT', 1);
+  }
+  $('#syncIn').addEventListener('change', (e) => {
+    S.syncToken = e.target.value.trim(); S.syncGist = ''; store.set('settings', S);
+    if (S.syncToken) syncNow({ manual: true }); else setSyncInfo('off');
+  });
+  $('#syncNowBtn').addEventListener('click', () => { S.syncToken = $('#syncIn').value.trim(); store.set('settings', S); if (S.syncToken) syncNow({ manual: true }); });
+  $('#syncOffBtn').addEventListener('click', () => { S.syncToken = ''; S.syncGist = ''; store.set('settings', S); $('#syncIn').value = ''; setSyncInfo('off'); toast('Sync turned off on this device'); });
+  $('#syncLinkBtn').addEventListener('click', async () => {
+    if (!S.syncToken) { toast('Paste your sync token first', 'warn'); return; }
+    const link = `${location.origin}${location.pathname}#sync=${S.syncToken}`;
+    try { await navigator.clipboard.writeText(link); toast('Setup link copied. Open it once on your phone, and keep it private like a password.'); }
+    catch { toast('Couldn’t copy. Paste the token into Settings on your phone instead.', 'warn'); }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncNow(); });
+  // the setup link opened while the app is already running only changes the hash
+  window.addEventListener('hashchange', () => {
+    const got = readTokenFromHash();
+    if (got.sync) { toast('Sync turned on for this device'); syncNow({ manual: true }); }
+    else if (got.lichess) { cache.clear(); toast('Lichess token saved'); }
+  });
+  if (S.syncToken && !store.get('syncLast', 0)) toast('Sync turned on for this device');
+  setInterval(() => { if (!document.hidden) syncNow(); }, 120000);
+  if (S.syncToken) syncNow();
+}
+
+// ---------- Openings page ----------
+let opFilter = { q: '', side: 'all', tags: [], courseOnly: false };
+function catalogMatches(e) {
+  if (opFilter.side !== 'all' && e.side !== opFilter.side) return false;
+  if (opFilter.courseOnly && !e.course) return false;
+  if (opFilter.tags.some((t) => !e.tags.includes(t))) return false;
+  const q = opFilter.q.trim().toLowerCase();
+  return !q || e.name.toLowerCase().includes(q) || e.blurb.toLowerCase().includes(q) || pgnText(e.moves).toLowerCase().includes(q);
+}
+const tagGroupOf = (t) => TAG_GROUPS.find((g) => g.tags.includes(t))?.key || 'extra';
+function learnCourse(id) { setMode('learn'); openOpening(id); window.scrollTo(0, 0); }
+function buildFrom(e) { setMode('learn'); openBuilder(null, null, { name: e.name, side: e.side, path: e.moves.split(' ') }); }
+function opButtons(e, courses) {
+  return el('div', { class: 'row gap' },
+    ...courses.map((id) => { const o = courseById(id); return o ? el('button', { class: 'btn small primary', onclick: () => learnCourse(id) }, 'Learn: ' + shortName(o)) : null; }),
+    el('button', { class: 'btn small', onclick: () => playOn(e.moves.split(' '), e.side || 'white', e.name) }, 'Play it'),
+    e.side ? el('button', { class: 'btn small ghost', onclick: () => buildFrom(e), title: 'Start your own course from this position' }, 'Build a course') : null);
+}
+function renderOpeningsList(list) {
+  list.innerHTML = '';
+  const hits = CATALOG.filter(catalogMatches);
+  if (!hits.length) { list.append(el('div', { class: 'muted' }, 'No openings match. Try removing a filter.')); return; }
+  for (const e of hits) {
+    list.append(el('div', { class: 'card opcard' },
+      el('div', { class: 'optop' }, el('b', {}, e.name), el('span', { class: 'kind ' + (e.side === 'white' ? 'learn' : 'practice') }, e.side === 'white' ? 'White' : 'Black')),
+      el('div', { class: 'mono opmoves' }, pgnText(e.moves)),
+      el('div', { class: 'optags' }, ...e.tags.map((t) => el('span', { class: 'optag g-' + tagGroupOf(t) }, t))),
+      el('div', { class: 'opblurb' }, e.blurb),
+      opButtons(e, e.course ? [e.course] : [])));
+  }
+}
+function renderOpenings() {
+  const box = $('#openingsPanel');
+  box.innerHTML = '';
+  // defences guide
+  if (opFilter.side !== 'black') {
+    const guide = el('details', { class: 'card span2 dguide', open: innerWidth > 860 ? '' : null }, el('summary', {}, el('span', { class: 'label' }, 'As White (1.e4): defences you need to know')));
+    const grid = el('div', { class: 'dgrid' });
+    for (const d of WHITE_DEFENSES) {
+      grid.append(el('div', { class: 'dcard' }, el('b', {}, d.name), el('p', {}, d.text), opButtons({ name: d.name, moves: d.moves, side: 'white' }, d.courses)));
+    }
+    guide.append(grid);
+    box.append(guide);
+  }
+  // filters
+  const search = el('input', { type: 'search', class: 'binput', placeholder: 'Search openings or moves…', 'aria-label': 'Search openings' });
+  search.value = opFilter.q;
+  const list = el('div', { class: 'oplist' });
+  search.addEventListener('input', (e) => { opFilter.q = e.target.value; renderOpeningsList(list); });
+  const chip = (label, on, onclick, extra = '') => el('button', { class: 'chip' + (on ? ' on' : '') + extra, onclick, 'aria-pressed': on ? 'true' : 'false' }, label);
+  const filters = el('div', { class: 'card span2 opfilters' },
+    el('h2', { class: 'otitle' }, 'Openings'),
+    el('div', { class: 'muted' }, `${CATALOG.length} openings with their style and character. Tap a filter to narrow the list; filters combine.`),
+    search,
+    el('div', { class: 'seg3 opside', role: 'group', 'aria-label': 'Side' }, ...[['all', 'All'], ['white', 'As White'], ['black', 'As Black']].map(([v, t]) =>
+      el('button', { class: opFilter.side === v ? 'on' : '', onclick: () => { opFilter.side = v; renderOpenings(); } }, t))),
+    ...TAG_GROUPS.map((g) => el('div', { class: 'opgroup' }, el('span', { class: 'label' }, g.label),
+      el('div', { class: 'chips' }, ...g.tags.map((t) => chip(t, opFilter.tags.includes(t), () => {
+        opFilter.tags = opFilter.tags.includes(t) ? opFilter.tags.filter((x) => x !== t) : [...opFilter.tags, t]; renderOpenings();
+      }, ' g-' + g.key))))),
+    el('div', { class: 'chips' }, chip('Has a course', opFilter.courseOnly, () => { opFilter.courseOnly = !opFilter.courseOnly; renderOpenings(); }),
+      opFilter.tags.length || opFilter.courseOnly || opFilter.q ? el('button', { class: 'btn small ghost', onclick: () => { opFilter = { q: '', side: opFilter.side, tags: [], courseOnly: false }; renderOpenings(); } }, 'Clear filters') : null));
+  box.append(filters);
+  const wrap = el('div', { class: 'span2' }, list);
+  box.append(wrap);
+  renderOpeningsList(list);
+}
+
 // ---------- wire up ----------
 document.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => {
   S.source = b.dataset.src; saveSettings(); outOfBook = false; renderAll();
@@ -1893,6 +2072,7 @@ document.addEventListener('keydown', (e) => {
 });
 document.querySelectorAll('[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
 initSettings();
+initSync();
 loadMyTree().then(() => {
   if (S.mode === 'overview') renderOverview();
   if (gamesMeta && !gamesMeta.pgn && Date.now() - gamesMeta.updated > 864e5 && (S.chesscomUser || S.lichessUser)) importGames({ quiet: true });

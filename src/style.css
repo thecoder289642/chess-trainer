@@ -309,3 +309,31 @@ select.binput.small { width: auto; margin: 0; padding: 6px 8px; }
 .askrow { display: flex; gap: 8px; align-items: center; }
 .askrow .binput { margin: 0; flex: 1; min-width: 0; }
 .asksugg .chip[disabled] { opacity: .5; }
+
+/* Openings page */
+.opfilters { display: flex; flex-direction: column; gap: 10px; }
+.opfilters .binput { margin: 0; }
+.opside { width: max-content; max-width: 100%; }
+.opgroup { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.opgroup .label { margin: 0; min-width: 44px; }
+.chip.on { color: var(--text); border-color: var(--accent); background: rgba(127,176,105,.16); }
+.oplist { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.opcard { display: flex; flex-direction: column; gap: 8px; }
+.optop { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.opmoves { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.optags { display: flex; flex-wrap: wrap; gap: 4px; }
+.optag { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.optag.g-style, .chip.g-style.on { color: #f0b98a; border-color: rgba(232,137,74,.5); }
+.optag.g-type, .chip.g-type.on { color: #a9cbee; border-color: rgba(106,167,224,.5); }
+.optag.g-extra, .chip.g-extra.on { color: #c9b8e0; border-color: rgba(176,150,214,.5); }
+.opblurb { font-size: 14px; flex: 1; }
+.opcard .row.gap { margin: 0; }
+.dguide summary { cursor: pointer; list-style: none; }
+.dguide summary::-webkit-details-marker { display: none; }
+.dguide summary .label::after { content: ' ▾'; }
+.dguide:not([open]) summary .label::after { content: ' ▸'; }
+.dgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; margin-top: 10px; }
+.dcard { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.dcard p { margin: 0; font-size: 14px; flex: 1; }
+.dcard .row.gap { margin: 0; }
+@media (max-width: 520px) { .modes button { padding: 7px 11px; } .brand span { display: none; } }

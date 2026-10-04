@@ -72,6 +72,20 @@ export const LESSONS = [
     ],
   },
   {
+    id: 'martian', name: 'Martian Gambit (vs Caro-Kann)', side: 'white', tag: null,
+    blurb: 'A surprise knight sacrifice on e6 against the Caro-Kann. Objectively dubious (about −1.2 if Black defends perfectly), but full of traps at club level.',
+    lines: [
+      { name: 'The trap: 9...Nd7?? 10.Qg6#', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Bg6 N1f3 h6 Ne6 fxe6 Bd3 Bxd3 Qxd3 Nd7 Qg6#', note: 'After the sacrifice the e8–h5 diagonal is wide open. Natural development with ...Nd7 walks into mate on g6.' },
+      { name: '9...Nf6? 10.Ne5!', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Bg6 N1f3 h6 Ne6 fxe6 Bd3 Bxd3 Qxd3 Nf6 Ne5 Qd5 Qg6+ Kd8 Nf7+ Kc8 Nxh8', note: 'Ne5 threatens Qg6+ and Nf7. The king gets chased and you win the h8 rook.' },
+      { name: '9...Qd5? 10.Qg6+', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Bg6 N1f3 h6 Ne6 fxe6 Bd3 Bxd3 Qxd3 Qd5 Qg6+ Kd8 Ne5 Kc8 Qe8+ Kc7 Qxf8', note: 'Check first, then Ne5 brings the knight in. The f8 bishop falls.' },
+      { name: 'Best defence: 9...Qa5+!', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Bg6 N1f3 h6 Ne6 fxe6 Bd3 Bxd3 Qxd3 Qa5+ Bd2 Qf5 Qb3 Nd7 Qxb7', note: 'The queen check and ...Qf5 trade off your attack. Grab b7 and fight on: you are about a pawn worse, so only play this gambit for surprise value.' },
+      { name: '7...Qd6 (declining)', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Bg6 N1f3 h6 Ne6 Qd6 Nxf8 Kxf8 Bd3 Bxd3 Qxd3', note: 'If Black refuses the knight, take the f8 bishop: Black loses the bishop pair and the right to castle.' },
+      { name: '6...e6 (no ...h6)', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Bg6 N1f3 e6 Bd3 Nd7 Bxg6 hxg6 Qe2', note: 'No sacrifice needed: trade on g6 and develop. Qe2 eyes e6 and prepares Bd2 and long castling.' },
+      { name: '5...e6', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 e6 N5f3 Be7 Ne2 Nf6 Ng3 Bg6 Bd3', note: 'Black blocks the e6 square, so bring the knight back and develop normally.' },
+      { name: '5...Nf6', moves: 'e4 c6 d4 d5 Nc3 dxe4 Nxe4 Bf5 Ng5 Nf6 Bd3 Bxd3 Qxd3 h6 N5f3 e6 Ne2', note: 'Trade the light bishops with Bd3 and reroute the knights. A normal Caro-Kann position.' },
+    ],
+  },
+  {
     id: 'scandi', name: 'vs Scandinavian', side: 'white', tag: null,
     blurb: 'Take on d5, then develop with tempo by attacking the queen.',
     lines: [
