@@ -283,3 +283,13 @@ select.binput.small { width: auto; margin: 0; padding: 6px 8px; }
 .mv[class*="rv-"] { cursor: pointer; }
 .mv.rv-inaccuracy, .mv.rv-mistake, .mv.rv-blunder, .mv.rv-best { color: var(--c); }
 .mv.cur { background: color-mix(in srgb, var(--info) 28%, transparent); border-radius: 4px; color: var(--text); }
+
+/* Engine check in lessons */
+.lengine { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.lengine .label { margin-bottom: 0; }
+.etop { display: flex; flex-wrap: wrap; gap: 6px; }
+.etop .chip { cursor: default; }
+.etop .chip.best { color: #a9cbee; border-color: rgba(106,167,224,.6); }
+.etop .chip.course { box-shadow: inset 0 -2px 0 var(--accent); }
+.everdict { font-size: 14px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.everdict.good { color: var(--accent); } .everdict.ok { color: var(--warn); } .everdict.bad { color: #f0a49b; }

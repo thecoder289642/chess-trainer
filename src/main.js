@@ -692,12 +692,62 @@ function lessonContinue() {
       syncBoard(); renderAll(); lessonContinue();
     }, L.ply === 0 ? 600 : 550);
   } else {
-    L.wrongHere = 0;
-    if (L.kind === 'learn') showArrow();
+    L.wrongHere = 0; L.showCourse = false; L.hinted = false;
+    if (L.kind === 'learn') showArrow(); else drawLessonArrows();
     renderAll();
+    loadLessonEngine(L);
   }
 }
-function showArrow() { const m = expectedMove(); cg.setAutoShapes([{ orig: m.from, dest: m.to, brush: 'green' }]); }
+function showArrow() { if (lesson) { lesson.showCourse = true; drawLessonArrows(); } }
+
+// ---------- Engine check in lessons ----------
+// At each of your moves Stockfish's top choices are shown next to the course move, so a course
+// built from your own habits can't quietly teach a bad move. Hidden in Practice until you've tried.
+const lessonEngine = new Map(); // fen -> null (pending) | { top: [{ uci, san, cp }], courseSan, courseCp, side }
+async function loadLessonEngine(L) {
+  const fen = game.fen();
+  if (lessonEngine.has(fen)) return;
+  lessonEngine.set(fen, null);
+  const course = new Chess(fen).move(L.moves[L.ply]);
+  const top = await engine.topMoves(fen, { depth: 14, n: 3 }).catch(() => []);
+  let courseCp = top.find((t) => t.uci === uciOf(course))?.cp;
+  if (courseCp === undefined) {
+    const c = new Chess(fen); c.move(course.san);
+    courseCp = c.isCheckmate() ? (sideOf(fen) === 'white' ? 10000 : -10000) : (await engine.analyse(c.fen(), { depth: 12 }).catch(() => ({ cp: 0 }))).cp;
+  }
+  lessonEngine.set(fen, { top: top.map((t) => ({ ...t, san: sanOf(fen, t.uci) })), courseSan: course.san, courseCp, side: sideOf(fen) });
+  if (lesson === L && game.fen() === fen) { drawLessonArrows(); renderAll(); }
+}
+const engineVisible = (L) => L.kind === 'learn' || L.wrongHere > 0 || L.hinted;
+function drawLessonArrows() {
+  const L = lesson; if (!L || L.done || sideOf(game.fen()) !== userColor) return;
+  const shapes = [];
+  const m = expectedMove();
+  if (L.showCourse) shapes.push({ orig: m.from, dest: m.to, brush: 'green' });
+  const E = lessonEngine.get(game.fen());
+  const best = E?.top[0];
+  if (best && engineVisible(L) && best.uci !== uciOf(m)) shapes.push({ orig: best.uci.slice(0, 2), dest: best.uci.slice(2, 4), brush: 'blue' });
+  cg.setAutoShapes(shapes);
+}
+// The course move's cost against the engine's best, in pawns, from your side.
+function courseLoss(E) { const s = E.side === 'white' ? 1 : -1; return Math.max(0, ((E.top[0]?.cp ?? E.courseCp) - E.courseCp) * s) / 100; }
+function lessonEngineCard(L, o) {
+  const E = lessonEngine.get(game.fen());
+  const box = el('div', { class: 'lengine' }, el('div', { class: 'label' }, 'Engine check'));
+  if (!engineVisible(L)) { box.append(el('div', { class: 'muted' }, 'Hidden while you practise. It appears after your first try.')); return box; }
+  if (!E) { box.append(el('div', { class: 'muted' }, 'Stockfish is thinking…')); return box; }
+  if (!E.top.length) { box.append(el('div', { class: 'muted' }, 'No engine result for this position.')); return box; }
+  box.append(el('div', { class: 'etop' }, ...E.top.map((t, i) => el('span', { class: 'chip' + (i === 0 ? ' best' : '') + (t.san === E.courseSan ? ' course' : '') },
+    `${i === 0 ? '★ ' : ''}${t.san} ${evalText(t.cp)}`))));
+  const loss = courseLoss(E);
+  const isBest = E.top[0].san === E.courseSan;
+  if (isBest) box.append(el('div', { class: 'everdict good' }, `✓ ${E.courseSan} is the engine’s top move.`));
+  else if (loss <= 0.3) box.append(el('div', { class: 'everdict good' }, `✓ ${E.courseSan} is fine (${loss.toFixed(1)} below ${E.top[0].san}, the blue arrow).`));
+  else if (loss <= 0.8) box.append(el('div', { class: 'everdict ok' }, `${E.courseSan} is playable, but the engine prefers ${E.top[0].san} (blue arrow) by ${loss.toFixed(1)} pawns.`));
+  else box.append(el('div', { class: 'everdict bad' }, `${E.courseSan} costs about ${loss.toFixed(1)} pawns. The engine plays ${E.top[0].san} (blue arrow).`,
+    o.custom ? el('button', { class: 'btn small', onclick: () => openBuilder(o.id) }, 'Edit course') : null));
+  return box;
+}
 
 function lessonUserMove(orig, dest) {
   const L = lesson;
@@ -714,9 +764,19 @@ function lessonUserMove(orig, dest) {
   // wrong: show it briefly, then take it back
   let tried = null;
   try { tried = new Chess(game.fen()).move({ from: orig, to: dest, promotion: promo }); } catch {}
+  const E = lessonEngine.get(game.fen());
+  const s = sideOf(game.fen()) === 'white' ? 1 : -1;
+  const asGood = tried && E?.top.find((t) => t.uci === uciOf(tried) && (t.cp - E.top[0].cp) * s >= -25);
+  if (asGood) { // an engine-approved alternative: no penalty, but the course move is the one to learn
+    L.msg = { kind: 'info', text: `${tried.san} is ${asGood === E.top[0] ? 'the engine’s top move' : 'as good as the engine’s best'} too! Your course plays ${exp.san} here (green arrow), so play that to continue.` };
+    L.showCourse = true; L.wrongHere = Math.max(L.wrongHere, 1); drawLessonArrows();
+    setTimeout(() => { if (lesson === L) syncBoard(); }, 250);
+    renderAll();
+    return;
+  }
   L.mistakes++; L.wrongHere++;
   L.msg = { kind: 'bad', text: `${tried ? tried.san : 'That'} isn't the move here.` + (L.wrongHere >= 2 || L.kind === 'learn' ? ` The move is ${exp.san} (arrow).` : ' Try again.') };
-  if (L.wrongHere >= 2 || L.kind === 'learn') showArrow();
+  if (L.wrongHere >= 2 || L.kind === 'learn') showArrow(); else drawLessonArrows();
   tick(true);
   setTimeout(() => { if (lesson === L) syncBoard(); }, 250);
   renderAll();
@@ -733,7 +793,7 @@ function lessonDone() {
   renderAll();
 }
 
-function lessonHint() { if (lesson && !lesson.done && sideOf(game.fen()) === userColor) { lesson.mistakes++; lesson.msg = { kind: 'info', text: 'Hint shown (counts as a slip).' }; showArrow(); renderAll(); } }
+function lessonHint() { if (lesson && !lesson.done && sideOf(game.fen()) === userColor) { lesson.mistakes++; lesson.hinted = true; lesson.msg = { kind: 'info', text: 'Hint shown (counts as a slip).' }; showArrow(); renderAll(); } }
 
 function renderLearn() {
   const box = $('#learnPanel');
@@ -813,6 +873,7 @@ function renderLesson(box, o) {
     el('div', { class: 'pbar thin' }, el('span', { style: `width:${(L.ply / total) * 100}%` })),
     L.kind === 'learn' || L.done ? el('p', { class: 'note' }, line.note) : null);
   if (L.msg && !L.done) card.append(el('div', { class: 'lmsg ' + L.msg.kind }, L.msg.text));
+  if (yourTurn) card.append(lessonEngineCard(L, o));
   if (L.done) {
     const clean = L.mistakes === 0;
     card.append(el('div', { class: 'lmsg ' + (clean ? 'good' : 'info') },
