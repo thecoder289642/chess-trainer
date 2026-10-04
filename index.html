@@ -18,11 +18,10 @@
 <body>
 <header class="top">
   <div class="brand"><img src="icon-192.png" alt=""><span>Opening Trainer</span></div>
-  <nav class="srcs" aria-label="Opponent move source">
-    <button data-src="lichess">Lichess</button>
-    <button data-src="masters">Masters</button>
-    <button data-src="mine">My games</button>
-    <button data-src="rep">Repertoire</button>
+  <nav class="modes" aria-label="Mode">
+    <button data-mode="overview">Overview</button>
+    <button data-mode="learn">Learn</button>
+    <button data-mode="play">Play</button>
   </nav>
   <button class="icon" id="setBtn" aria-label="Settings" title="Settings">
     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -33,31 +32,41 @@
   <section class="boardcol">
     <div id="status" class="status"></div>
     <div class="boardwrap">
-      <div class="evalbar" title="Engine evaluation"><div id="evalfill" class="evalfill"></div><span id="evaltxt" class="evaltxt">0.0</span></div>
+      <div class="evalbar" id="evalbar" title="Engine evaluation" hidden><div id="evalfill" class="evalfill"></div><span id="evaltxt" class="evaltxt">0.0</span></div>
       <div class="board-outer"><div id="board" class="brown cburnett"></div></div>
     </div>
     <div class="controls">
-      <div class="seg3" role="group" aria-label="Your colour">
+      <div class="seg3 play-only" role="group" aria-label="Your colour">
         <button data-color="white">White</button><button data-color="black">Black</button><button data-color="random">Random</button>
       </div>
-      <button class="btn" id="undoBtn" title="Take back (←)">Undo</button>
+      <button class="btn play-only" id="undoBtn" title="Take back (←)">Undo</button>
       <button class="btn" id="flipBtn" title="Flip board">Flip</button>
-      <button class="btn primary" id="newBtn" title="New game (n)">New game</button>
+      <button class="btn primary play-only" id="newBtn" title="New game (n)">New game</button>
     </div>
   </section>
 
   <aside class="panel">
-    <div class="card drillcard">
-      <div><div class="label">Drill</div><div id="drillName" class="drillname">Free play</div></div>
-      <button class="btn small" id="drillBtn">Pick opening</button>
+    <div id="playPanel" class="stack">
+      <div class="card">
+        <div class="label">Opponent plays moves from</div>
+        <div class="srcs" role="group" aria-label="Opponent move source">
+          <button data-src="lichess">Lichess</button><button data-src="masters">Masters</button><button data-src="mine">My games</button><button data-src="rep">Repertoire</button>
+        </div>
+      </div>
+      <div class="card drillcard">
+        <div><div class="label">Start from</div><div id="drillName" class="drillname">Free play</div></div>
+        <button class="btn small" id="drillBtn">Pick opening</button>
+      </div>
+      <div class="card">
+        <div id="opening" class="opening">Starting position</div>
+        <div id="statsHead" class="label"></div>
+        <div id="stats"></div>
+      </div>
+      <div id="warn" class="warn" hidden></div>
     </div>
-    <div class="card">
-      <div id="opening" class="opening">Starting position</div>
-      <div id="statsHead" class="label"></div>
-      <div id="stats"></div>
-    </div>
-    <div id="warn" class="warn" hidden></div>
-    <div class="card">
+    <div id="learnPanel" class="stack" hidden></div>
+    <div id="overviewPanel" class="ovgrid" hidden></div>
+    <div class="card" id="movesCard">
       <div class="label">Moves</div>
       <div id="moves" class="moves"></div>
     </div>
@@ -74,6 +83,13 @@
 
 <dialog id="settings" class="dlg">
   <div class="dlghead"><h2>Settings</h2><button class="icon" id="closeSettings" aria-label="Close">✕</button></div>
+
+  <section>
+    <h3>Your games</h3>
+    <div class="acct"><input id="ccIn" type="text" placeholder="chess.com username" autocomplete="off" autocapitalize="off" spellcheck="false"><input id="liIn" type="text" placeholder="Lichess username" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+    <div class="row gap"><button class="btn small primary" id="gamesLoad">Load / refresh my games</button><label class="btn small ghost filebtn">Import PGN of my games<input type="file" id="gamesFile" accept=".pgn,text/plain" hidden></label></div>
+    <p class="muted importStatus" id="gamesStatus"></p>
+  </section>
 
   <section>
     <h3>Lichess token</h3>
@@ -103,6 +119,7 @@
     <h3>Training</h3>
     <label class="row"><input type="checkbox" id="flagIn"> Flag rare, weak and losing moves</label>
     <label class="row"><input type="checkbox" id="hideIn"> Hide move stats on my turn (test yourself)</label>
+    <label class="row"><input type="checkbox" id="evalIn"> Show the eval bar in Play mode</label>
     <label class="row"><input type="checkbox" id="soundIn"> Move sounds</label>
   </section>
 

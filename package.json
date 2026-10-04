@@ -1,0 +1,21 @@
+{
+  "name": "chess-trainer",
+  "private": true,
+  "type": "module",
+  "description": "Opening Trainer: learn and practise chess openings against popular moves, personalised from your own games.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check-lessons.mjs",
+    "check:engine": "node scripts/sf-check.cjs",
+    "serve": "python3 -m http.server 8000"
+  },
+  "dependencies": {
+    "@lichess-org/chessground": "^10.4.2",
+    "@mliebelt/pgn-parser": "^1.4.19",
+    "chess.js": "^1.4.0",
+    "stockfish": "^19.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
