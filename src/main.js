@@ -10,7 +10,7 @@ import { buildTrees, fetchChessCom, fetchLichess, gamesFromPgnText, guessPgnPlay
 const DEFAULTS = {
   source: 'lichess', ratings: [1200, 1400, 1600], speeds: ['blitz', 'rapid', 'classical'],
   token: '', engineElo: 1500, engineAfterBook: true, flagMoves: true, hideStatsMyTurn: false, showEval: false, mode: 'overview', chesscomUser: '', lichessUser: '',
-  colorPref: 'white', sound: true,
+  colorPref: 'white', sound: true, coach: true,
 };
 const store = {
   get(k, d) { try { const v = localStorage.getItem('ot.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -30,6 +30,7 @@ const SOURCES = {
   masters: { label: 'Masters', short: 'Masters games' },
   mine: { label: 'My games', short: 'My games' },
   rep: { label: 'Repertoire', short: 'My repertoire' },
+  engine: { label: 'Engine', short: 'Engine only' },
 };
 
 // ---------- state ----------
@@ -240,16 +241,20 @@ function playUserSan(san) {
 function afterUserMove(beforeFen, res) {
   const ply = game.history().length - 1;
   const gen = ++busy;
+  coach = null; cg.setAutoShapes([]);
+  if (game.isCheckmate()) celebrate();
   syncBoard(); renderAll();
   if (S.flagMoves) checkUserMove(beforeFen, res, ply, gen);
-  if (!game.isGameOver()) setTimeout(() => opponentMove(gen), 380);
+  if (game.isGameOver()) return;
+  if (S.coach) coachMove(beforeFen, res, ply, gen);
+  else setTimeout(() => opponentMove(gen), 380);
 }
 
 async function opponentMove(gen) {
   if (gen !== busy || isUserTurn() || game.isGameOver()) return;
   setStatus('thinking');
   let stats = null, err = null;
-  if (!outOfBook) {
+  if (!outOfBook && S.source !== 'engine') {
     try { stats = await getStats(S.source, game.fen()); } catch (e) { err = e; }
     if (gen !== busy) return;
     if (stats && stats.source === 'rep' && stats.moves.length > 1 && S.token) {
@@ -269,13 +274,13 @@ async function opponentMove(gen) {
   } else {
     if (!outOfBook) {
       outOfBook = true;
-      toast(err ? err.message + (S.engineAfterBook ? ' — engine takes over' : '') : `Out of book (${SOURCES[S.source].short})${S.engineAfterBook ? ' — engine takes over' : ''}`, err ? 'warn' : 'info');
+      if (S.source !== 'engine') toast(err ? err.message + (S.engineAfterBook ? ' — engine takes over' : '') : `Out of book (${SOURCES[S.source].short})${S.engineAfterBook ? ' — engine takes over' : ''}`, err ? 'warn' : 'info');
     }
-    if (!S.engineAfterBook) { setStatus('ended'); renderAll(); return; }
+    if (!S.engineAfterBook && S.source !== 'engine') { setStatus('ended'); renderAll(); return; }
     try {
-      const r = await engine.analyse(game.fen(), { movetime: 700, elo: S.engineElo });
+      const uci = await engineMove(game.fen());
       if (gen !== busy) return;
-      if (r.best) playMove({ from: r.best.slice(0, 2), to: r.best.slice(2, 4), promotion: r.best[4] }, 'engine');
+      if (uci) playMove({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] }, 'engine');
     } catch { toast('Engine failed to load', 'warn'); setStatus('ended'); renderAll(); return; }
   }
   syncBoard(); setStatus(); renderAll();
@@ -291,7 +296,7 @@ async function checkUserMove(beforeFen, res, ply, gen) {
     const rank = { offrep: 1, rare: 1, weak: 2, mistake: 3, blunder: 4 };
     if (!note.flag || rank[flag] > rank[note.flag]) note.flag = flag;
     renderAll();
-    showWarning(ply);
+    if (!S.coach) showWarning(ply);
   };
 
   // repertoire check
@@ -319,7 +324,8 @@ async function checkUserMove(beforeFen, res, ply, gen) {
     }
   } catch {}
 
-  // engine check
+  // engine check (the live coach does its own)
+  if (S.coach) return;
   try {
     const a = await engine.analyse(beforeFen, { depth: 12 });
     if (moveNotes[ply] !== note) return;
@@ -345,7 +351,7 @@ function fenAfterPly(ply) {
 
 function newGame(opts = {}) {
   busy++;
-  outOfBook = false; lastOpening = null; evalWhite = null; moveNotes = [];
+  outOfBook = false; lastOpening = null; evalWhite = null; moveNotes = []; coach = null; review = null; cg.setAutoShapes([]);
   const pref = S.colorPref;
   userColor = pref === 'random' ? (Math.random() < 0.5 ? 'white' : 'black') : pref;
   drill = opts.drill || null;
@@ -361,7 +367,8 @@ function newGame(opts = {}) {
 }
 
 function undo() {
-  busy++;
+  if (review) return;
+  busy++; coach = null;
   const minPly = drill ? drill.moves.length : 0;
   if (game.history().length <= minPly) return;
   // take back to the previous position where it's the user's turn
@@ -381,9 +388,11 @@ function renderStatus() {
   if (game.isCheckmate()) t = `Checkmate — ${sideOf(game.fen()) === userColor ? 'you lost' : 'you won'}`;
   else if (game.isDraw()) t = 'Draw';
   else if (statusMode === 'thinking') t = 'Opponent is thinking…';
+  else if (coach?.pending) t = 'Checking your move…';
+  else if (coach?.waiting) t = `${CLS[coach.cls].label}! Take back or continue`;
   else if (statusMode === 'ended') t = 'Line finished — undo or start a new game';
   else t = isUserTurn() ? `Your move (${userColor})` : 'Opponent to move';
-  const src = outOfBook ? (S.engineAfterBook ? `Engine (~${S.engineElo})` : 'Out of book') : SOURCES[S.source].short;
+  const src = outOfBook || S.source === 'engine' ? (S.engineAfterBook || S.source === 'engine' ? engineLabel() : 'Out of book') : SOURCES[S.source].short;
   s.innerHTML = '';
   s.append(el('span', { class: 'dot ' + (isUserTurn() ? 'you' : 'them') }), el('span', {}, t), el('span', { class: 'pill' }, src));
 }
@@ -391,19 +400,26 @@ function renderStatus() {
 function renderMoves() {
   const box = $('#moves');
   box.innerHTML = '';
-  const h = game.history();
+  const R = review;
+  const h = R ? R.hist.map((x) => x.san) : game.history();
   const startNo = 1;
   for (let i = 0; i < h.length; i += 2) {
     const row = el('div', { class: 'mrow' }, el('span', { class: 'mno' }, startNo + i / 2 + '.'));
     for (const j of [i, i + 1]) {
       if (j >= h.length) break;
+      if (R) {
+        const P = R.done ? R.plies[j] : null;
+        row.append(el('span', { class: `mv rv-${P ? P.cls : 'none'}${R.idx === j + 1 ? ' cur' : ''}`, title: P ? CLS[P.cls].label : '', onclick: () => reviewGoto(j + 1) }, h[j] + (P ? CLS[P.cls].sym : '')));
+        continue;
+      }
       const n = moveNotes[j] || {};
       const sym = { rare: '?!', offrep: '?!', weak: '?!', mistake: '?', blunder: '??' }[n.flag] || '';
       row.append(el('span', { class: `mv by-${n.by || ''} f-${n.flag || 'none'}`, title: (n.notes || []).map((x) => x.text).join('\n'), onclick: () => n.flag && showWarning(j) }, h[j] + sym));
     }
     box.append(row);
   }
-  box.scrollTop = box.scrollHeight;
+  const cur = box.querySelector('.cur');
+  if (cur) box.scrollTop = cur.offsetTop - box.offsetTop - box.clientHeight / 2; else box.scrollTop = box.scrollHeight;
 }
 
 async function renderStats() {
@@ -412,6 +428,7 @@ async function renderStats() {
   const myTurn = isUserTurn();
   const head = $('#statsHead');
   head.textContent = `${SOURCES[S.source].short} · ${myTurn ? 'your options' : 'their likely replies'}`;
+  if (S.source === 'engine') { head.textContent = 'Engine only'; $('#opening').textContent = detectOpening() || lastOpening || 'Starting position'; box.innerHTML = ''; box.append(el('div', { class: 'muted' }, `Stockfish plays every move (strength ${eloText(S.engineElo)}). Change it above.`)); return; }
   if (myTurn && S.hideStatsMyTurn) { box.innerHTML = ''; box.append(el('div', { class: 'muted' }, 'Hidden on your turn (Settings) — make your move.')); return; }
   box.innerHTML = '';
   box.append(el('div', { class: 'muted' }, 'Loading…'));
@@ -457,34 +474,42 @@ let lastEvalFen = null;
 async function renderEval() {
   const fen = game.fen();
   const bar = $('#evalfill'), txt = $('#evaltxt');
-  const show = S.mode === 'play' && S.showEval;
+  const R = S.mode === 'play' && review?.done ? review : null;
+  const show = S.mode === 'play' && (S.showEval || !!R);
   $('#evalbar').hidden = !show;
   if (!show) { lastEvalFen = null; return; }
+  if (R) { lastEvalFen = null; return drawEval(R.evals[R.idx]); }
   if (game.isGameOver() || fen === lastEvalFen) return;
   lastEvalFen = fen;
   try {
     const r = await engine.analyse(fen, { depth: 11 });
     if (fen !== game.fen()) return;
     evalWhite = r;
-    const cp = Math.max(-800, Math.min(800, r.cp));
-    const pct = 50 + 50 * (2 / (1 + Math.exp(-0.004 * cp)) - 1);
-    bar.style.height = pct + '%';
-    bar.parentElement.classList.toggle('flip', userColor === 'black');
-    txt.textContent = r.mate !== null ? '#' + r.mate : (r.cp >= 0 ? '+' : '') + (r.cp / 100).toFixed(1);
+    drawEval(r.cp, r.mate);
   } catch { txt.textContent = '—'; }
+}
+function drawEval(cpWhite, mate = null) {
+  const bar = $('#evalfill'), txt = $('#evaltxt');
+  const cp = Math.max(-800, Math.min(800, cpWhite));
+  bar.style.height = (50 + 50 * (2 / (1 + Math.exp(-0.004 * cp)) - 1)) + '%';
+  bar.parentElement.classList.toggle('flip', userColor === 'black');
+  txt.textContent = mate !== null ? '#' + mate : evalText(cpWhite);
 }
 
 function renderAll() {
   document.body.classList.toggle('mode-learn', S.mode === 'learn');
   for (const b of document.querySelectorAll('[data-mode]')) b.classList.toggle('on', b.dataset.mode === S.mode);
-  $('#playPanel').hidden = S.mode !== 'play';
+  $('#playPanel').hidden = S.mode !== 'play' || !!review;
+  $('#reviewBtn').textContent = review ? 'Exit review' : 'Review';
+  $('#reviewPanel').hidden = S.mode !== 'play' || !review;
   $('#learnPanel').hidden = S.mode !== 'learn';
   $('#overviewPanel').hidden = S.mode !== 'overview';
   document.body.classList.toggle('mode-overview', S.mode === 'overview');
   renderEval();
   if (S.mode === 'overview') { renderOverview(); return; }
   if (S.mode === 'learn') { renderLearn(); renderMoves(); return; }
-  renderStatus(); renderMoves(); renderStats(); renderSourceTabs();
+  if (review) { renderReview(); renderMoves(); return; }
+  renderStatus(); renderMoves(); renderStats(); renderSourceTabs(); renderStrength(); renderCoach(); renderResult();
 }
 
 function renderSourceTabs() {
@@ -541,7 +566,7 @@ function openSettings() {
   $('#tokenIn').value = S.token;
   $('#ccIn').value = S.chesscomUser || ''; $('#liIn').value = S.lichessUser || '';
   $('#gamesStatus').textContent = gamesMeta ? `${gamesMeta.count} games (${gamesMeta.who}), updated ${new Date(gamesMeta.updated).toLocaleDateString()}` : 'No games loaded yet.';
-  $('#eloIn').value = S.engineElo; $('#eloOut').textContent = S.engineElo;
+  $('#eloIn').value = S.engineElo; $('#eloOut').textContent = eloText(S.engineElo); $('#coachSet').checked = S.coach;
   $('#afterBook').checked = S.engineAfterBook; $('#flagIn').checked = S.flagMoves; $('#hideIn').checked = S.hideStatsMyTurn; $('#evalIn').checked = S.showEval; $('#soundIn').checked = S.sound;
   for (const b of d.querySelectorAll('[data-rating]')) b.classList.toggle('on', S.ratings.includes(+b.dataset.rating));
   for (const b of d.querySelectorAll('[data-speed]')) b.classList.toggle('on', S.speeds.includes(b.dataset.speed));
@@ -567,7 +592,8 @@ function initSettings() {
   $('#gamesLoad').addEventListener('click', () => { S.chesscomUser = $('#ccIn').value.trim(); S.lichessUser = $('#liIn').value.trim(); saveSettings(); importGames(); });
   $('#gamesFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (f) importPgnGames(await f.text()); e.target.value = ''; });
   $('#tokenIn').addEventListener('change', (e) => { S.token = e.target.value.trim(); saveSettings(); cache.clear(); });
-  $('#eloIn').addEventListener('input', (e) => { S.engineElo = +e.target.value; $('#eloOut').textContent = S.engineElo; saveSettings(); });
+  $('#eloIn').addEventListener('input', (e) => { setElo(+e.target.value); $('#eloOut').textContent = eloText(S.engineElo); });
+  $('#coachSet').addEventListener('change', (e) => { S.coach = e.target.checked; saveSettings(); });
   $('#afterBook').addEventListener('change', (e) => { S.engineAfterBook = e.target.checked; saveSettings(); });
   $('#flagIn').addEventListener('change', (e) => { S.flagMoves = e.target.checked; saveSettings(); });
   $('#hideIn').addEventListener('change', (e) => { S.hideStatsMyTurn = e.target.checked; saveSettings(); });
@@ -624,7 +650,7 @@ const masteredCount = (o) => o.lines.filter((_, i) => mastered(o, i)).length;
 const saveProgress = () => store.set('progress', progress);
 
 function setMode(m, initial) {
-  busy++; lesson = null; builder = null; hideWarning(); cg.setAutoShapes([]);
+  busy++; lesson = null; builder = null; review = null; coach = null; hideWarning(); cg.setAutoShapes([]);
   S.mode = m; saveSettings();
   if (m === 'overview') { game = new Chess(); moveNotes = []; renderAll(); window.scrollTo(0, 0); return; }
   if (m === 'learn') { learnView = { screen: 'home', id: null }; game = new Chess(); moveNotes = []; userColor = 'white'; syncBoard(); renderAll(); }
@@ -700,7 +726,7 @@ function lessonDone() {
   const L = lesson; L.done = true;
   const p = prog(L.o, L.idx);
   p.seen = true; p.tries++; p.last = Date.now();
-  if (L.kind === 'practice' && L.mistakes === 0) p.clean++;
+  if (L.kind === 'practice' && L.mistakes === 0) { p.clean++; celebrate(false); }
   if (L.kind === 'practice' && L.mistakes > 0) p.clean = 0;
   saveProgress();
   cg.setAutoShapes([]);
@@ -1297,6 +1323,357 @@ function accountCard(welcome) {
 }
 const shortName = (o) => o.name.replace(/^vs /, '').replace(/: .*/, '').replace(/ setup.*| vs .*/, '').replace(' Defense', '').replace(' Game', '');
 
+// ---------- Engine strength ----------
+// 1320+ uses Stockfish's own UCI_Elo; below that it picks among its top moves with some
+// randomness (and the odd random move), since Stockfish can't limit itself further.
+const ELO_PRESETS = [[600, 'Beginner'], [1000, 'Casual'], [1400, 'Club'], [1800, 'Strong'], [2200, 'Expert'], [3000, 'Max']];
+const eloText = (e) => (e >= 3000 ? 'Max' : '~' + e);
+const engineLabel = () => `Engine (${eloText(S.engineElo)})`;
+function eloName(e) {
+  if (e >= 3000) return 'Full strength Stockfish';
+  if (e < 700) return 'Beginner: misses simple tactics, sometimes hangs pieces';
+  if (e < 1100) return 'Casual player: knows the basics, still blunders';
+  if (e < 1500) return 'Club player: solid, makes the odd mistake';
+  if (e < 1900) return 'Strong club player';
+  if (e < 2300) return 'Expert';
+  return 'Master';
+}
+function setElo(v) { S.engineElo = Math.max(400, Math.min(3000, v)); saveSettings(); renderStrength(); renderStatus(); }
+function initStrength() {
+  $('#eloQuick').addEventListener('input', (e) => setElo(+e.target.value));
+  $('#coachIn').addEventListener('change', (e) => { S.coach = e.target.checked; saveSettings(); if (!S.coach && coach?.waiting) coachContinue(); });
+  $('#eloPresets').append(...ELO_PRESETS.map(([v, t]) => el('button', { 'data-elo': v, onclick: () => setElo(v) }, t)));
+}
+function renderStrength() {
+  $('#eloQuick').value = S.engineElo;
+  $('#eloQuickOut').textContent = eloText(S.engineElo);
+  $('#eloName').textContent = eloName(S.engineElo) + (S.source === 'engine' ? '' : '. Plays when the book runs out.');
+  for (const b of document.querySelectorAll('[data-elo]')) b.classList.toggle('on', +b.dataset.elo === S.engineElo);
+  $('#coachIn').checked = S.coach;
+}
+async function engineMove(fen) {
+  const elo = S.engineElo;
+  if (elo >= 3000) return (await engine.analyse(fen, { movetime: 900 })).best;
+  if (elo >= 1320) return (await engine.analyse(fen, { movetime: 600, elo })).best;
+  const legal = new Chess(fen).moves({ verbose: true });
+  if (Math.random() < (1320 - elo) / 3000) return uciOf(legal[Math.floor(Math.random() * legal.length)]);
+  const top = await engine.topMoves(fen, { depth: 5 + Math.round((elo - 400) / 230), n: 5 });
+  if (!top.length) return null;
+  const s = sideOf(fen) === 'white' ? 1 : -1;
+  const temp = 30 + (1320 - elo) / 4; // centipawns: higher = more willing to pick worse moves
+  const w = top.map((t) => Math.exp(((t.cp - top[0].cp) * s) / temp));
+  let r = Math.random() * w.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < top.length; i++) { r -= w[i]; if (r <= 0) return top[i].uci; }
+  return top[0].uci;
+}
+
+// ---------- Move classification (shared by the coach and game review) ----------
+const CLS = {
+  best: { label: 'Best move', sym: '★' }, excellent: { label: 'Excellent', sym: '!' }, good: { label: 'Good', sym: '' },
+  book: { label: 'Book move', sym: '' }, inaccuracy: { label: 'Inaccuracy', sym: '?!' }, mistake: { label: 'Mistake', sym: '?' }, blunder: { label: 'Blunder', sym: '??' },
+};
+const BAD = ['inaccuracy', 'mistake', 'blunder'];
+const winPct = (cp) => 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1); // Lichess's eval-to-win% curve
+const evalText = (cp) => (Math.abs(cp) >= 9000 ? (cp > 0 ? '+M' : '−M') : (cp >= 0 ? '+' : '') + (cp / 100).toFixed(1));
+const accuracy = (loss) => Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * loss) - 3.1669));
+// Win% the mover gave away (0–100) and its category; evals are from White's side.
+function classify(beforeCp, afterCp, mover, isBest) {
+  const s = mover === 'white' ? 1 : -1;
+  const loss = Math.max(0, winPct(beforeCp * s) - winPct(afterCp * s));
+  const cls = isBest ? 'best' : loss < 2 ? 'excellent' : loss < 6 ? 'good' : loss < 12 ? 'inaccuracy' : loss < 22 ? 'mistake' : 'blunder';
+  return { cls, loss };
+}
+
+// ---------- Live coach ----------
+// After each of your moves the engine judges it before the opponent replies. The verdict stays in
+// its own card until your next move; after a mistake or blunder the opponent waits for you.
+let coach = null; // { ply, san, pending, cls, loss, bestSan, bestUci, before, after, waiting, gen }
+async function coachMove(beforeFen, res, ply, gen) {
+  const C = coach = { ply, san: res.san, pending: true, gen };
+  renderAll();
+  let top, after;
+  try {
+    [top] = await engine.topMoves(beforeFen, { depth: 12, n: 1 });
+    after = game.isGameOver() ? null : await engine.analyse(fenAfterPly(ply), { depth: 12 });
+  } catch { if (coach === C) { coach = null; renderAll(); setTimeout(() => opponentMove(gen), 200); } return; }
+  if (coach !== C || gen !== busy) return;
+  const isBest = !!top && top.uci === uciOf(res);
+  const afterCp = after ? after.cp : 0;
+  const { cls, loss } = classify(top ? top.cp : afterCp, afterCp, sideOf(beforeFen), isBest);
+  Object.assign(C, { pending: false, cls, loss, before: top ? top.cp : afterCp, after: afterCp, bestUci: top?.uci, bestSan: top && !isBest ? sanOf(beforeFen, top.uci) : null, waiting: cls === 'mistake' || cls === 'blunder' });
+  if (BAD.includes(cls)) { // mark it in the move list too
+    const n = moveNotes[ply];
+    if (n) { const map = { inaccuracy: 'weak', mistake: 'mistake', blunder: 'blunder' }; n.flag = map[cls]; n.notes.push({ text: `${CLS[cls].label}. Best was ${C.bestSan}.`, sev: cls === 'blunder' ? 4 : cls === 'mistake' ? 3 : 2 }); }
+  }
+  renderAll();
+  if (!C.waiting) setTimeout(() => opponentMove(gen), 250);
+}
+function coachContinue() {
+  if (!coach?.waiting) return;
+  coach.waiting = false; cg.setAutoShapes([]);
+  renderAll();
+  opponentMove(busy);
+}
+function renderCoach() {
+  const box = $('#coach');
+  const C = coach;
+  const n = C ? moveNotes[C.ply] : null;
+  const bookNotes = (n?.notes || []).filter((x) => !/^(Inaccuracy|Mistake|Blunder)\./.test(x.text));
+  if (!S.coach || !C) { box.hidden = true; return; }
+  box.hidden = false; box.innerHTML = '';
+  const moveNo = `${Math.floor(C.ply / 2) + 1}${C.ply % 2 ? '…' : '.'}`;
+  if (C.pending) { box.className = 'coach'; box.append(el('div', { class: 'ct' }, `${moveNo} ${C.san}`), el('div', { class: 'muted' }, 'Checking your move…')); return; }
+  box.className = 'coach cls-' + C.cls;
+  box.append(el('div', { class: 'ct' }, el('span', { class: 'cbadge' }, CLS[C.cls].sym || '✓'), `${moveNo} ${C.san}${CLS[C.cls].sym}`, el('b', {}, CLS[C.cls].label)));
+  const evalLine = `Eval ${evalText(C.before)} → ${evalText(C.after)}`;
+  if (C.cls === 'best') box.append(el('div', {}, 'That’s the engine’s top choice. ', el('span', { class: 'muted' }, evalLine)));
+  else if (!BAD.includes(C.cls)) box.append(el('div', {}, `Fine move. ${C.bestSan ? 'The engine slightly prefers ' + C.bestSan + '.' : ''} `, el('span', { class: 'muted' }, evalLine)));
+  else box.append(el('div', {}, `Better was ${C.bestSan}. `, el('span', { class: 'muted' }, `${evalLine} (gave away ${Math.round(C.loss)}% winning chances)`)));
+  for (const b of bookNotes) box.append(el('div', { class: 'muted' }, b.text));
+  if (C.waiting) {
+    box.append(el('div', { class: 'row gap' },
+      el('button', { class: 'btn small primary', onclick: () => { const u = C.bestUci; undo(); if (u) cg.setAutoShapes([{ orig: u.slice(0, 2), dest: u.slice(2, 4), brush: 'green' }]); } }, 'Take back & show best'),
+      el('button', { class: 'btn small', onclick: undo }, 'Take back'),
+      el('button', { class: 'btn small ghost', onclick: coachContinue }, 'Continue anyway')));
+  }
+}
+
+// ---------- Result + celebration ----------
+function renderResult() {
+  const box = $('#result');
+  const over = game.isGameOver() && game.history().length > 0;
+  box.hidden = !over;
+  if (!over) return;
+  const won = game.isCheckmate() && sideOf(game.fen()) !== userColor;
+  const text = game.isCheckmate() ? (won ? 'You won by checkmate!' : 'Checkmate. You lost this one.') : game.isStalemate() ? 'Draw by stalemate' : 'Draw';
+  box.className = 'card result' + (won ? ' won' : '');
+  box.innerHTML = '';
+  box.append(el('div', { class: 'big' }, won ? '🏆 ' : '', text),
+    el('div', { class: 'row gap' },
+      el('button', { class: 'btn primary', onclick: startReview }, 'Game review'),
+      el('button', { class: 'btn', onclick: () => newGame({ drill }) }, 'New game')));
+}
+
+function fanfare() {
+  if (!S.sound) return;
+  try {
+    actx ||= new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784, 1047].forEach((f, i) => {
+      const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime + i * 0.12;
+      o.type = 'triangle'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.16, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + (i === 3 ? 0.5 : 0.16));
+      o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.55);
+    });
+  } catch {}
+}
+
+// Confetti over the page; `big` adds the "You won!" banner and a fanfare.
+function celebrate(big = true) {
+  if (big) {
+    fanfare();
+    const b = el('div', { class: 'winbanner', role: 'status' }, el('div', { class: 'wtrophy' }, '🏆'), el('b', {}, 'You won!'), el('small', {}, 'Checkmate'));
+    document.querySelector('.boardwrap').append(b);
+    setTimeout(() => b.classList.add('out'), 2300);
+    setTimeout(() => b.remove(), 2800);
+  }
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const cv = el('canvas', { class: 'confetti', 'aria-hidden': 'true' });
+  document.body.append(cv);
+  const dpr = window.devicePixelRatio || 1, W = innerWidth, H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const x = cv.getContext('2d'); x.scale(dpr, dpr);
+  const colors = ['#7fb069', '#e2b04a', '#6aa7e0', '#e0675a', '#f3efe6', '#c49bd8'];
+  const ps = Array.from({ length: big ? 180 : 70 }, () => ({
+    x: W / 2 + (Math.random() - 0.5) * W * 0.25, y: H * 0.4, vx: (Math.random() - 0.5) * 16, vy: -Math.random() * 15 - 5,
+    s: 6 + Math.random() * 6, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.35, c: colors[Math.floor(Math.random() * colors.length)],
+  }));
+  const life = big ? 3400 : 2200; const t0 = performance.now();
+  const frame = (t) => {
+    const dt = t - t0;
+    x.clearRect(0, 0, W, H);
+    for (const p of ps) {
+      p.vy += 0.32; p.vx *= 0.99; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+      x.save(); x.translate(p.x, p.y); x.rotate(p.r); x.globalAlpha = Math.max(0, 1 - dt / life);
+      x.fillStyle = p.c; x.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); x.restore();
+    }
+    if (dt < life) requestAnimationFrame(frame); else cv.remove();
+  };
+  requestAnimationFrame(frame);
+}
+
+// ---------- Game review ----------
+// Stockfish looks at every position of the game, then each move is graded by how much
+// winning chance it gave away (like chess.com's review). Step through, see the better move,
+// watch the engine's line, or retry the position.
+let review = null; // { hist, fens, by, color, evals[], best[], plies[], idx, done, pv }
+async function startReview() {
+  const hist = game.history({ verbose: true });
+  if (hist.length < 2) { toast('Play a few moves first'); return; }
+  busy++; coach = null; hideWarning(); cg.setAutoShapes([]);
+  const R = review = { hist, fens: [startFen, ...hist.map((h) => h.after)], by: hist.map((_, i) => moveNotes[i]?.by), color: userColor, evals: [], best: [], plies: [], idx: hist.length, done: false, pv: null };
+  renderAll(); reviewShow();
+  for (let i = 0; i < R.fens.length; i++) {
+    if (review !== R) return;
+    const c = new Chess(R.fens[i]);
+    if (c.isCheckmate()) { R.evals[i] = sideOf(R.fens[i]) === 'white' ? -10000 : 10000; R.best[i] = null; }
+    else if (c.isDraw()) { R.evals[i] = 0; R.best[i] = null; }
+    else {
+      const [t] = await engine.topMoves(R.fens[i], { depth: 13, n: 1 }).catch(() => []);
+      if (review !== R) return;
+      R.evals[i] = t ? t.cp : (R.evals[i - 1] ?? 0); R.best[i] = t || null;
+    }
+    renderReview();
+  }
+  R.plies = R.hist.map((h, i) => {
+    const mover = sideOf(R.fens[i]); const best = R.best[i];
+    const isBest = !!best && best.uci === uciOf(h);
+    let { cls, loss } = classify(R.evals[i], R.evals[i + 1], mover, isBest);
+    if ((R.by[i] === 'drill' || R.by[i] === 'book') && loss < 6) cls = 'book';
+    return { san: h.san, mover, cls, loss, best, bestSan: best && !isBest ? sanOf(R.fens[i], best.uci) : null };
+  });
+  R.done = true;
+  R.idx = 0;
+  const firstBad = R.plies.findIndex((P) => P.mover === R.color && BAD.includes(P.cls));
+  R.idx = firstBad === -1 ? R.hist.length : firstBad + 1;
+  renderAll(); reviewShow();
+}
+function exitReview() {
+  if (!review) return;
+  review = null; cg.setAutoShapes([]);
+  syncBoard(); renderAll();
+}
+function reviewGoto(i) {
+  const R = review; if (!R) return;
+  R.idx = Math.max(0, Math.min(R.hist.length, i)); R.pv = null;
+  reviewShow(); renderAll();
+}
+function reviewShow() {
+  const R = review; const fen = R.fens[R.idx]; const p = R.idx - 1; const h = R.hist[p];
+  const turn = sideOf(fen);
+  cg.set({ fen, orientation: R.color, turnColor: turn, check: new Chess(fen).inCheck() ? turn : false, lastMove: h ? [h.from, h.to] : undefined, movable: { color: undefined, dests: new Map() } });
+  const P = R.done ? R.plies[p] : null;
+  const shapes = [];
+  if (P && BAD.includes(P.cls)) shapes.push({ orig: h.from, dest: h.to, brush: 'red' });
+  if (P && P.bestSan) shapes.push({ orig: P.best.uci.slice(0, 2), dest: P.best.uci.slice(2, 4), brush: 'green' });
+  cg.setAutoShapes(shapes);
+}
+// Plays the engine's best line from before the current move, one move at a time.
+function reviewPlayBest() {
+  const R = review; const p = R.idx - 1; const P = R.plies[p];
+  if (!P?.best?.pv) return;
+  const c = new Chess(R.fens[p]);
+  const pv = R.pv = { sans: [], start: p, done: false };
+  cg.setAutoShapes([]);
+  const moves = P.best.pv.slice(0, 8);
+  let k = 0;
+  const step = () => {
+    if (review !== R || R.pv !== pv) return;
+    if (k >= moves.length) { pv.done = true; renderReview(); return; }
+    const u = moves[k++]; let m;
+    try { m = c.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }); } catch { pv.done = true; renderReview(); return; }
+    cg.set({ fen: c.fen(), lastMove: [m.from, m.to], turnColor: sideOf(c.fen()), check: c.inCheck() ? sideOf(c.fen()) : false });
+    tick(!!m.captured);
+    pv.sans.push(m.san); renderReview();
+    setTimeout(step, 800);
+  };
+  renderReview();
+  setTimeout(step, 250);
+}
+function reviewRetry() {
+  const R = review; const p = R.idx - 1;
+  playOn(R.hist.slice(0, p).map((h) => h.san), R.color, `Retry move ${Math.floor(p / 2) + 1}`);
+  toast('Find a better move than ' + R.hist[p].san);
+}
+function sanLine(sans, startPly) {
+  return sans.map((s, i) => { const ply = startPly + i; return ply % 2 === 0 ? `${ply / 2 + 1}.${s}` : i === 0 ? `${Math.floor(ply / 2) + 1}…${s}` : s; }).join(' ');
+}
+function evalGraph(R) {
+  const W = 300, H = 64, n = R.evals.length;
+  const X = (i) => (n > 1 ? (i / (n - 1)) * W : 0);
+  const Y = (cp) => H - (winPct(Math.max(-1500, Math.min(1500, cp))) / 100) * H;
+  const pts = R.evals.map((cp, i) => `${X(i).toFixed(1)},${Y(cp).toFixed(1)}`).join(' ');
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'egraph'); svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Evaluation over the game; click to jump to a move');
+  const add = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); svg.append(e); return e; };
+  add('rect', { x: 0, y: 0, width: W, height: H, class: 'eg-bg' });
+  add('polygon', { points: `0,${H} ${pts} ${W},${H}`, class: 'eg-white' });
+  add('line', { x1: 0, x2: W, y1: H / 2, y2: H / 2, class: 'eg-mid' });
+  add('line', { x1: X(R.idx), x2: X(R.idx), y1: 0, y2: H, class: 'eg-cur' });
+  R.plies.forEach((P, i) => { if (P.cls === 'mistake' || P.cls === 'blunder') add('circle', { cx: X(i + 1), cy: Y(R.evals[i + 1]), r: 3.2, class: 'eg-dot rv-' + P.cls }); });
+  svg.addEventListener('click', (e) => { const r = svg.getBoundingClientRect(); reviewGoto(Math.round(((e.clientX - r.left) / r.width) * (n - 1))); });
+  return svg;
+}
+function renderReview() {
+  const R = review; const box = $('#reviewPanel');
+  box.innerHTML = '';
+  if (!R.done) {
+    const done = R.evals.length, total = R.fens.length;
+    setStatusText('Analysing your game…');
+    box.append(el('div', { class: 'card' },
+      el('button', { class: 'back', onclick: exitReview }, '← Back to game'),
+      el('h2', { class: 'otitle' }, 'Game review'),
+      el('div', { class: 'muted' }, `Stockfish is checking every move (${done} of ${total})…`),
+      el('div', { class: 'pbar' }, el('span', { style: `width:${(done / total) * 100}%` }))));
+    return;
+  }
+  const side = (who) => R.plies.filter((P) => (P.mover === R.color) === (who === 'you'));
+  const acc = (who) => { const ps = side(who).filter((P) => P.cls !== 'book'); return ps.length ? Math.round(ps.reduce((a, P) => a + accuracy(P.loss), 0) / ps.length) : null; };
+  const count = (who, c) => side(who).filter((P) => P.cls === c).length;
+  // summary
+  const sum = el('div', { class: 'card' },
+    el('button', { class: 'back', onclick: exitReview }, '← Back to game'),
+    el('h2', { class: 'otitle' }, 'Game review'),
+    el('div', { class: 'accrow' },
+      el('div', {}, el('small', {}, 'You'), el('b', {}, acc('you') ?? '—', acc('you') !== null ? '%' : '')),
+      el('div', {}, el('small', {}, 'Opponent'), el('b', {}, acc('them') ?? '—', acc('them') !== null ? '%' : ''))),
+    el('div', { class: 'muted' }, 'Accuracy: how close your moves were to the engine’s best.'),
+    evalGraph(R));
+  const tbl = el('div', { class: 'rvtbl' }, el('span', {}, ''), el('small', {}, 'You'), el('small', {}, 'Them'));
+  for (const c of ['best', 'excellent', 'good', 'book', 'inaccuracy', 'mistake', 'blunder']) {
+    tbl.append(el('span', { class: 'rvname rv-' + c }, (CLS[c].sym ? CLS[c].sym + ' ' : '') + CLS[c].label), el('b', {}, count('you', c)), el('b', { class: 'muted' }, count('them', c)));
+  }
+  sum.append(tbl);
+  box.append(sum);
+  // current move
+  const p = R.idx - 1; const P = R.plies[p];
+  const cur = el('div', { class: 'card rvcur' + (P ? ' cls-' + P.cls : '') });
+  const nav = el('div', { class: 'row gap rvnav' },
+    el('button', { class: 'btn small', onclick: () => reviewGoto(0), 'aria-label': 'First move' }, '⏮'),
+    el('button', { class: 'btn small', onclick: () => reviewGoto(R.idx - 1), 'aria-label': 'Previous move' }, '◀'),
+    el('button', { class: 'btn small', onclick: () => reviewGoto(R.idx + 1), 'aria-label': 'Next move' }, '▶'),
+    el('button', { class: 'btn small', onclick: () => reviewGoto(R.hist.length), 'aria-label': 'Last move' }, '⏭'));
+  if (!P) cur.append(el('div', { class: 'ct' }, 'Starting position'), el('div', { class: 'muted' }, 'Use ▶ or the arrow keys to step through the game.'));
+  else {
+    const who = P.mover === R.color ? 'You' : 'Opponent';
+    cur.append(el('div', { class: 'ct' }, el('span', { class: 'cbadge' }, CLS[P.cls].sym || '✓'), `${sanLine([P.san], p)}${CLS[P.cls].sym}`, el('b', {}, CLS[P.cls].label)));
+    const line = `Eval ${evalText(R.evals[p])} → ${evalText(R.evals[p + 1])}`;
+    let text;
+    if (P.cls === 'best') text = `${who} found the engine’s top move.`;
+    else if (P.cls === 'book') text = 'A normal opening move.';
+    else if (BAD.includes(P.cls)) text = `${who} gave away ${Math.round(P.loss)}% winning chances. Best was ${P.bestSan} (green arrow).`;
+    else text = P.bestSan ? `Fine. The engine slightly preferred ${P.bestSan}.` : 'Fine.';
+    cur.append(el('div', {}, text), el('div', { class: 'muted' }, line));
+    if (R.pv) cur.append(el('div', { class: 'mono pvline' }, 'Best line: ', sanLine(R.pv.sans, R.pv.start) || '…'));
+    cur.append(el('div', { class: 'row gap' },
+      P.bestSan && !R.pv ? el('button', { class: 'btn small primary', onclick: reviewPlayBest }, 'Show best line') : null,
+      R.pv ? el('button', { class: 'btn small', onclick: () => reviewGoto(R.idx) }, R.pv.done ? 'Back to the game' : 'Stop') : null,
+      P.mover === R.color && BAD.includes(P.cls) ? el('button', { class: 'btn small', onclick: reviewRetry, title: 'Play from the position before this move' }, 'Try again') : null));
+  }
+  cur.append(nav);
+  box.append(cur);
+  // key moments
+  const keys = R.plies.map((P, i) => ({ P, i })).filter(({ P }) => BAD.includes(P.cls));
+  const km = el('div', { class: 'card' }, el('div', { class: 'label' }, 'Key moments'));
+  if (!keys.length) km.append(el('div', { class: 'muted' }, 'No inaccuracies, mistakes or blunders. Clean game!'));
+  else km.append(el('div', { class: 'chips' }, ...keys.map(({ P, i }) =>
+    el('button', { class: `chip rvchip rv-${P.cls}${R.idx === i + 1 ? ' on' : ''}`, onclick: () => reviewGoto(i + 1), title: (P.mover === R.color ? 'You: ' : 'Opponent: ') + CLS[P.cls].label },
+      (P.mover === R.color ? '' : '⟂ ') + sanLine([P.san], i) + CLS[P.cls].sym))));
+  box.append(km);
+  setStatusText(P ? `Move ${Math.floor(p / 2) + 1}: ${CLS[P.cls].label.toLowerCase()}` : 'Game review', P && P.mover === R.color ? 'you' : '');
+}
+
 // ---------- wire up ----------
 document.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click', () => {
   S.source = b.dataset.src; saveSettings(); outOfBook = false; renderAll();
@@ -1305,12 +1682,20 @@ document.querySelectorAll('[data-src]').forEach((b) => b.addEventListener('click
 document.querySelectorAll('[data-color]').forEach((b) => b.addEventListener('click', () => { S.colorPref = b.dataset.color; saveSettings(); newGame({ drill }); }));
 $('#newBtn').addEventListener('click', () => newGame({ drill }));
 $('#undoBtn').addEventListener('click', undo);
+$('#reviewBtn').addEventListener('click', () => (review ? exitReview() : startReview()));
+initStrength();
 $('#drillBtn').addEventListener('click', openDrill);
 $('#setBtn').addEventListener('click', openSettings);
 $('#flipBtn').addEventListener('click', () => cg.toggleOrientation());
 $('#closeDrill').addEventListener('click', () => $('#drill').close());
 document.addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]') || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || S.mode !== 'play') return;
+  if (review) {
+    if (e.key === 'ArrowLeft') reviewGoto(review.idx - 1);
+    if (e.key === 'ArrowRight') reviewGoto(review.idx + 1);
+    if (e.key === 'Escape') exitReview();
+    return;
+  }
   if (e.key === 'ArrowLeft' || e.key === 'u') undo();
   if (e.key === 'n') newGame({ drill });
 });

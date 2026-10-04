@@ -225,3 +225,61 @@ select.binput.small { width: auto; margin: 0; padding: 6px 8px; }
 .bopen small { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
 .bdel { background: none; border: 0; color: var(--muted); padding: 10px 12px; font-size: 14px; }
 .bdel:hover { color: #f0a49b; }
+
+/* Engine strength */
+.strength { display: flex; align-items: center; gap: 10px; }
+.strength input { flex: 1; accent-color: var(--accent); }
+.strength b { min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
+#eloPresets { margin-top: 8px; }
+.coachrow { align-items: flex-start; margin-top: 10px; font-size: 14px; }
+
+/* Move classes: shared by the coach card and game review */
+:root { --c-best: #7fb069; --c-excellent: #9cc98a; --c-good: #9aa3b2; --c-book: #c9a46b; --c-inaccuracy: #e2b04a; --c-mistake: #e8894a; --c-blunder: #e0675a; }
+.rv-best { --c: var(--c-best); } .rv-excellent { --c: var(--c-excellent); } .rv-good { --c: var(--c-good); } .rv-book { --c: var(--c-book); }
+.rv-inaccuracy { --c: var(--c-inaccuracy); } .rv-mistake { --c: var(--c-mistake); } .rv-blunder { --c: var(--c-blunder); }
+.cls-best { --c: var(--c-best); } .cls-excellent { --c: var(--c-excellent); } .cls-good { --c: var(--c-good); } .cls-book { --c: var(--c-book); }
+.cls-inaccuracy { --c: var(--c-inaccuracy); } .cls-mistake { --c: var(--c-mistake); } .cls-blunder { --c: var(--c-blunder); }
+
+/* Live coach */
+.coach { border-radius: var(--radius); padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid var(--c, var(--line)); background: var(--card); display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.coach[hidden] { display: none; }
+.ct { display: flex; align-items: center; gap: 8px; font-weight: 700; flex-wrap: wrap; }
+.ct b { color: var(--c, var(--text)); font-weight: 650; }
+.cbadge { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 99px; background: var(--c, var(--line)); color: #111; font-size: 12px; font-weight: 800; }
+
+/* Result + win */
+.result.won { border-color: var(--accent); background: linear-gradient(135deg, rgba(127,176,105,.18), var(--card)); }
+.result .big { font-size: 18px; font-weight: 700; }
+.boardwrap { position: relative; }
+.winbanner { position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%) scale(.6); opacity: 0; z-index: 20; background: rgba(22,24,29,.92); border: 2px solid var(--accent); border-radius: 18px; padding: 18px 34px; display: flex; flex-direction: column; align-items: center; gap: 2px; box-shadow: 0 16px 48px rgba(0,0,0,.5); animation: winpop .45s cubic-bezier(.2,1.6,.4,1) forwards; pointer-events: none; }
+.winbanner b { font-size: 30px; color: var(--accent); }
+.winbanner small { color: var(--muted); }
+.wtrophy { font-size: 44px; animation: wbounce 1s ease-in-out .4s 2; }
+.winbanner.out { animation: winout .45s ease forwards; }
+@keyframes winpop { to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+@keyframes winout { from { opacity: 1; transform: translate(-50%, -50%) scale(1); } to { opacity: 0; transform: translate(-50%, -60%) scale(.9); } }
+@keyframes wbounce { 50% { transform: translateY(-8px) rotate(-6deg); } }
+.confetti { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 60; }
+@media (prefers-reduced-motion: reduce) { .winbanner, .wtrophy { animation: none; opacity: 1; transform: translate(-50%, -50%); } }
+
+/* Game review */
+.accrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0 4px; }
+.accrow > div { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; display: flex; flex-direction: column; }
+.accrow small { color: var(--muted); font-size: 12px; }
+.accrow b { font-size: 26px; font-variant-numeric: tabular-nums; }
+.egraph { width: 100%; height: auto; display: block; margin-top: 10px; border-radius: 8px; cursor: pointer; }
+.eg-bg { fill: #2b2f37; } .eg-white { fill: #e9e6df; } .eg-mid { stroke: #8a8f99; stroke-width: .6; stroke-dasharray: 3 3; }
+.eg-cur { stroke: var(--info); stroke-width: 1.6; } .eg-dot { fill: var(--c); stroke: #111; stroke-width: .8; }
+.rvtbl { display: grid; grid-template-columns: 1fr 44px 44px; gap: 4px 8px; margin-top: 12px; font-size: 14px; align-items: center; }
+.rvtbl > small { color: var(--muted); text-align: center; font-size: 12px; }
+.rvtbl > b { text-align: center; font-variant-numeric: tabular-nums; }
+.rvname { color: var(--c); }
+.rvcur { border-left: 4px solid var(--c, var(--line)); display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.rvnav { justify-content: center; }
+.rvnav .btn { min-width: 44px; }
+.pvline { line-height: 1.45; overflow-wrap: anywhere; }
+.rvchip { color: var(--c); border-color: color-mix(in srgb, var(--c) 50%, transparent); }
+.rvchip.on { background: color-mix(in srgb, var(--c) 20%, transparent); }
+.mv[class*="rv-"] { cursor: pointer; }
+.mv.rv-inaccuracy, .mv.rv-mistake, .mv.rv-blunder, .mv.rv-best { color: var(--c); }
+.mv.cur { background: color-mix(in srgb, var(--info) 28%, transparent); border-radius: 4px; color: var(--text); }

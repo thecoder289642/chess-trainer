@@ -40,6 +40,7 @@
         <button data-color="white">White</button><button data-color="black">Black</button><button data-color="random">Random</button>
       </div>
       <button class="btn play-only" id="undoBtn" title="Take back (←)">Undo</button>
+      <button class="btn play-only" id="reviewBtn" title="Analyse this game with the engine">Review</button>
       <button class="btn" id="flipBtn" title="Flip board">Flip</button>
       <button class="btn primary play-only" id="newBtn" title="New game (n)">New game</button>
     </div>
@@ -50,13 +51,22 @@
       <div class="card">
         <div class="label">Opponent plays moves from</div>
         <div class="srcs" role="group" aria-label="Opponent move source">
-          <button data-src="lichess">Lichess</button><button data-src="masters">Masters</button><button data-src="mine">My games</button><button data-src="rep">Repertoire</button>
+          <button data-src="lichess">Lichess</button><button data-src="masters">Masters</button><button data-src="mine">My games</button><button data-src="rep">Repertoire</button><button data-src="engine">Engine</button>
         </div>
+      </div>
+      <div id="result" class="card result" hidden></div>
+      <div class="card">
+        <div class="label">Engine strength</div>
+        <div class="strength"><input id="eloQuick" type="range" min="400" max="3000" step="50" aria-label="Engine strength"><b id="eloQuickOut"></b></div>
+        <div class="muted" id="eloName"></div>
+        <div class="chips" id="eloPresets"></div>
+        <label class="row coachrow"><input type="checkbox" id="coachIn"> Live coach: check each move I play and pause after mistakes</label>
       </div>
       <div class="card drillcard">
         <div><div class="label">Start from</div><div id="drillName" class="drillname">Free play</div></div>
         <button class="btn small" id="drillBtn">Pick opening</button>
       </div>
+      <div id="coach" class="coach" hidden></div>
       <div class="card">
         <div id="opening" class="opening">Starting position</div>
         <div id="statsHead" class="label"></div>
@@ -64,6 +74,7 @@
       </div>
       <div id="warn" class="warn" hidden></div>
     </div>
+    <div id="reviewPanel" class="stack" hidden></div>
     <div id="learnPanel" class="stack" hidden></div>
     <div id="overviewPanel" class="ovgrid" hidden></div>
     <div class="card" id="movesCard">
@@ -110,13 +121,14 @@
 
   <section>
     <h3>Engine</h3>
-    <label class="row">Strength after book: <b id="eloOut">1500</b></label>
-    <input id="eloIn" type="range" min="1320" max="2800" step="20">
+    <label class="row">Strength: <b id="eloOut">1500</b></label>
+    <input id="eloIn" type="range" min="400" max="3000" step="50">
     <label class="row"><input type="checkbox" id="afterBook"> Engine keeps playing when the book runs out</label>
   </section>
 
   <section>
     <h3>Training</h3>
+    <label class="row"><input type="checkbox" id="coachSet"> Live coach in Play (pause after mistakes)</label>
     <label class="row"><input type="checkbox" id="flagIn"> Flag rare, weak and losing moves</label>
     <label class="row"><input type="checkbox" id="hideIn"> Hide move stats on my turn (test yourself)</label>
     <label class="row"><input type="checkbox" id="evalIn"> Show the eval bar in Play mode</label>

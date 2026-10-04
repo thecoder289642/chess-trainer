@@ -61,7 +61,7 @@ export class Engine {
     this.queue = job.catch(() => {});
     return job;
   }
-  // Returns the engine's top `n` moves, best first: [{ uci: 'e2e4', cp: number (white POV), mate: number|null }]
+  // Returns the engine's top `n` moves, best first: [{ uci: 'e2e4', pv: ['e2e4', ...], cp: number (white POV), mate: number|null }]
   topMoves(fen, { depth = 12, n = 3 } = {}) {
     const job = this.queue.then(async () => {
       await this._start();
@@ -75,11 +75,12 @@ export class Engine {
         this.send('go depth ' + depth);
       }, (l) => {
         if (!l.startsWith('info') || l.includes('lowerbound') || l.includes('upperbound')) return;
-        const k = l.match(/ multipv (\d+)/), s = l.match(/score (cp|mate) (-?\d+)/), pv = l.match(/ pv (\S+)/);
+        const k = l.match(/ multipv (\d+)/), s = l.match(/score (cp|mate) (-?\d+)/), pv = l.match(/ pv (.+)$/);
         if (!k || !s || !pv) return;
         const mate = s[1] === 'mate' ? +s[2] : null;
         const cp = mate === null ? +s[2] : mate > 0 ? 10000 : -10000;
-        lines.set(+k[1], { uci: pv[1], cp: cp * sign, mate: mate === null ? null : mate * sign });
+        const moves = pv[1].trim().split(' ');
+        lines.set(+k[1], { uci: moves[0], pv: moves, cp: cp * sign, mate: mate === null ? null : mate * sign });
       });
       this.send('setoption name MultiPV value 1');
       return [...lines.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
