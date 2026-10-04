@@ -4,13 +4,14 @@ import { parse as parsePgn } from '@mliebelt/pgn-parser';
 import { OPENINGS } from './openings.js';
 import { Engine } from './engine.js';
 import { LESSONS } from './lessons.js';
+import { CoachChat, describeError } from './ai.js';
 import { buildTrees, fetchChessCom, fetchLichess, gamesFromPgnText, guessPgnPlayer } from './games.js';
 
 // ---------- settings ----------
 const DEFAULTS = {
   source: 'lichess', ratings: [1200, 1400, 1600], speeds: ['blitz', 'rapid', 'classical'],
   token: '', engineElo: 1500, engineAfterBook: true, flagMoves: true, hideStatsMyTurn: false, showEval: false, mode: 'overview', chesscomUser: '', lichessUser: '',
-  colorPref: 'white', sound: true, coach: true,
+  colorPref: 'white', sound: true, coach: true, aiKey: '',
 };
 const store = {
   get(k, d) { try { const v = localStorage.getItem('ot.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -563,7 +564,7 @@ function buildRepTree(pgnText) {
 // ---------- settings dialog ----------
 function openSettings() {
   const d = $('#settings');
-  $('#tokenIn').value = S.token;
+  $('#tokenIn').value = S.token; $('#aiKeyIn').value = S.aiKey || '';
   $('#ccIn').value = S.chesscomUser || ''; $('#liIn').value = S.lichessUser || '';
   $('#gamesStatus').textContent = gamesMeta ? `${gamesMeta.count} games (${gamesMeta.who}), updated ${new Date(gamesMeta.updated).toLocaleDateString()}` : 'No games loaded yet.';
   $('#eloIn').value = S.engineElo; $('#eloOut').textContent = eloText(S.engineElo); $('#coachSet').checked = S.coach;
@@ -592,6 +593,7 @@ function initSettings() {
   $('#gamesLoad').addEventListener('click', () => { S.chesscomUser = $('#ccIn').value.trim(); S.lichessUser = $('#liIn').value.trim(); saveSettings(); importGames(); });
   $('#gamesFile').addEventListener('change', async (e) => { const f = e.target.files[0]; if (f) importPgnGames(await f.text()); e.target.value = ''; });
   $('#tokenIn').addEventListener('change', (e) => { S.token = e.target.value.trim(); saveSettings(); cache.clear(); });
+  $('#aiKeyIn').addEventListener('change', (e) => { S.aiKey = e.target.value.trim(); saveSettings(); });
   $('#eloIn').addEventListener('input', (e) => { setElo(+e.target.value); $('#eloOut').textContent = eloText(S.engineElo); });
   $('#coachSet').addEventListener('change', (e) => { S.coach = e.target.checked; saveSettings(); });
   $('#afterBook').addEventListener('change', (e) => { S.engineAfterBook = e.target.checked; saveSettings(); });
@@ -650,7 +652,7 @@ const masteredCount = (o) => o.lines.filter((_, i) => mastered(o, i)).length;
 const saveProgress = () => store.set('progress', progress);
 
 function setMode(m, initial) {
-  busy++; lesson = null; builder = null; review = null; coach = null; hideWarning(); cg.setAutoShapes([]);
+  preview = null; busy++; lesson = null; builder = null; review = null; coach = null; hideWarning(); cg.setAutoShapes([]);
   S.mode = m; saveSettings();
   if (m === 'overview') { game = new Chess(); moveNotes = []; renderAll(); window.scrollTo(0, 0); return; }
   if (m === 'learn') { learnView = { screen: 'home', id: null }; game = new Chess(); moveNotes = []; userColor = 'white'; syncBoard(); renderAll(); }
@@ -668,7 +670,7 @@ function pickPracticeLine(o) {
 function nextLearnLine(o) { const i = o.lines.findIndex((_, i) => !prog(o, i).seen); return i === -1 ? 0 : i; }
 
 function startLine(o, idx, kind) {
-  const gen = ++busy;
+  const gen = ++busy; preview = null;
   hideWarning(); cg.setAutoShapes([]);
   userColor = o.side;
   game = new Chess(); moveNotes = [];
@@ -751,6 +753,7 @@ function lessonEngineCard(L, o) {
 
 function lessonUserMove(orig, dest) {
   const L = lesson;
+  if (preview) { endPreview(); return; }
   if (!L || L.done) { syncBoard(); return; }
   const piece = game.get(orig);
   const promo = piece && piece.type === 'p' && (dest[1] === '8' || dest[1] === '1') ? 'q' : undefined;
@@ -892,9 +895,137 @@ function renderLesson(box, o) {
       L.kind === 'practice' ? el('button', { class: 'btn small', onclick: lessonHint }, 'Hint') : null,
       el('button', { class: 'btn small ghost', onclick: () => startLine(o, L.idx, L.kind) }, 'Restart line')));
   }
+  card.append(askCard(L, o));
   box.append(card);
 }
 
+
+// ---------- Ask why (Claude) ----------
+// A chat under the lesson: questions go to Claude with the position, the course line and
+// Stockfish's view; Claude checks lines with the local engine and returns lines to watch.
+let ask = null; // { L, chat, items: [{ role, text, lines, pending, error }], busy, draft, focused }
+let preview = null; // { line: { label, moves }, token }
+const askState = (L) => (ask && ask.L === L ? ask : (ask = { L, chat: new CoachChat(), items: [], busy: false, draft: '', focused: false }));
+
+function askContext(L, o) {
+  const hist = game.history();
+  const line = o.lines[L.idx];
+  const E = lessonEngine.get(game.fen());
+  const myTurn = !L.done && sideOf(game.fen()) === userColor;
+  return [
+    `Opening course: ${o.name}. The student plays ${o.side}.`,
+    `Line being studied: ${line.name}: ${pgnText(line.moves)}`,
+    line.note ? `Course note for this line: ${line.note}` : '',
+    `Moves played so far: ${hist.length ? pgnText(hist.join(' ')) : '(starting position)'} (for tools: "${hist.join(' ')}")`,
+    myTurn ? `It is the student's move; the course move here is ${expectedMove().san}.` : '',
+    E?.top.length ? `Stockfish's top moves in this position: ${E.top.map((t) => `${t.san} ${evalText(t.cp)}`).join(', ')}.` : '',
+  ].filter(Boolean).join('\n');
+}
+
+// Replays SAN moves from the start; tolerates move numbers. Throws a readable error on an illegal move.
+function replaySans(text) {
+  const sans = text.trim().split(/\s+/).filter((t) => t && !/^\d+\.+$/.test(t)).map((t) => t.replace(/^\d+\.+/, ''));
+  const c = new Chess();
+  sans.forEach((m, i) => { try { c.move(m); } catch { throw new Error(`Illegal move "${m}" at ply ${i + 1} (after: ${sans.slice(0, i).join(' ') || 'the start'}).`); } });
+  return { c, sans: c.history() };
+}
+
+async function askRunTool(name, input, item) {
+  const { c, sans } = replaySans(input.moves);
+  if (name === 'show_line') {
+    if (!sans.length) throw new Error('The line has no moves.');
+    item.lines.push({ label: input.label.slice(0, 60), moves: sans });
+    renderAll();
+    return `Shown to the student as a button labelled "${input.label}".`;
+  }
+  if (c.isGameOver()) return JSON.stringify({ result: c.isCheckmate() ? `checkmate, ${sideOf(c.fen()) === 'white' ? 'Black' : 'White'} won` : 'draw' });
+  const top = await engine.topMoves(c.fen(), { depth: 15, n: input.lines || 3 });
+  return JSON.stringify({
+    side_to_move: sideOf(c.fen()),
+    candidates: top.map((t) => {
+      const pc = new Chess(c.fen()); const pv = [];
+      for (const u of t.pv.slice(0, 10)) { try { pv.push(pc.move({ from: u.slice(0, 2), to: u.slice(2, 4), promotion: u[4] }).san); } catch { break; } }
+      return { move: pv[0] || t.uci, eval_white_pov: t.mate !== null ? `mate in ${Math.abs(t.mate)} for ${t.mate > 0 ? 'White' : 'Black'}` : evalText(t.cp), line: sanLine(pv, sans.length) };
+    }),
+  });
+}
+
+async function askSend(L, o, q) {
+  const A = askState(L);
+  q = q.trim();
+  if (!q || A.busy || !S.aiKey) return;
+  A.busy = true; A.draft = '';
+  A.items.push({ role: 'user', text: q });
+  const item = { role: 'assistant', text: '', lines: [], pending: true };
+  A.items.push(item);
+  renderAll();
+  const show = (t) => { item.text = t; const n = document.querySelector(`[data-ask="${A.items.indexOf(item)}"]`); if (n) n.textContent = t; };
+  try {
+    const r = await A.chat.ask({ apiKey: S.aiKey, question: q, context: askContext(L, o), runTool: (n, i) => askRunTool(n, i, item), onText: show });
+    if (r.refused) item.text = (item.text ? item.text + '\n\n' : '') + 'Claude declined to answer this one.';
+  } catch (e) { item.error = true; item.text = describeError(e); }
+  item.pending = false; A.busy = false;
+  if (lesson === L) renderAll();
+}
+
+function previewLine(ln) {
+  const token = {}; preview = { line: ln, token };
+  const hist = game.history();
+  let k = 0; while (k < hist.length && k < ln.moves.length && hist[k] === ln.moves[k]) k++;
+  const c = new Chess(); for (let i = 0; i < k; i++) c.move(ln.moves[i]);
+  cg.setAutoShapes([]);
+  cg.set({ fen: c.fen(), lastMove: undefined, check: false, turnColor: sideOf(c.fen()), movable: { color: undefined, dests: new Map() } });
+  renderAll();
+  let i = k;
+  const step = () => {
+    if (preview?.token !== token || i >= ln.moves.length) return;
+    let m; try { m = c.move(ln.moves[i++]); } catch { return; }
+    cg.set({ fen: c.fen(), lastMove: [m.from, m.to], turnColor: sideOf(c.fen()), check: c.inCheck() ? sideOf(c.fen()) : false });
+    tick(!!m.captured);
+    setTimeout(step, 750);
+  };
+  setTimeout(step, 450);
+}
+function endPreview() { preview = null; syncBoard(); drawLessonArrows(); renderAll(); }
+
+function askCard(L, o) {
+  const A = askState(L);
+  const box = el('div', { class: 'askbox' }, el('div', { class: 'label' }, 'Ask why'));
+  if (!S.aiKey) {
+    box.append(el('div', { class: 'muted' }, 'Ask things like “why not Nxd4?” and Claude explains, checking with the engine and showing lines on the board. Add your Anthropic API key in Settings to turn it on.'),
+      el('button', { class: 'btn small', onclick: openSettings }, 'Open settings'));
+    return box;
+  }
+  if (preview) box.append(el('div', { class: 'lmsg info askprev' }, `Showing: ${preview.line.label}`, el('button', { class: 'btn small', onclick: endPreview }, 'Back to the lesson')));
+  const list = el('div', { class: 'asklist' });
+  A.items.forEach((it, i) => {
+    if (it.role === 'user') { list.append(el('div', { class: 'askq' }, it.text)); return; }
+    const a = el('div', { class: 'aska' + (it.error ? ' err' : '') }, el('div', { class: 'askt', 'data-ask': i }, it.text || (it.pending ? 'Thinking…' : '')));
+    if (it.lines.length) a.append(el('div', { class: 'asklines' }, ...it.lines.map((ln) =>
+      el('button', { class: 'chip askline' + (preview?.line === ln ? ' on' : ''), onclick: () => previewLine(ln), title: 'Play this line on the board' }, '▶ ' + ln.label))));
+    list.append(a);
+  });
+  if (A.items.length) box.append(list);
+  const E = lessonEngine.get(game.fen());
+  const myTurn = !L.done && sideOf(game.fen()) === userColor;
+  const sugg = [];
+  if (myTurn && (L.kind === 'learn' || L.wrongHere > 0 || L.hinted)) {
+    const exp = expectedMove().san;
+    sugg.push(`Why is ${exp} played here?`);
+    if (E?.top[0] && E.top[0].san !== exp) sugg.push(`Why does the engine prefer ${E.top[0].san}?`);
+  }
+  sugg.push('What’s the plan from here?');
+  if (!A.items.length) box.append(el('div', { class: 'chips asksugg' }, ...sugg.map((q) => el('button', { class: 'chip', disabled: A.busy ? '' : null, onclick: () => askSend(L, o, q) }, q))));
+  const input = el('input', { type: 'text', class: 'binput', placeholder: 'Why is this move better? What if I play…?', maxlength: '500', 'aria-label': 'Ask a question about this position' });
+  input.value = A.draft;
+  input.addEventListener('input', (e) => { A.draft = e.target.value; });
+  input.addEventListener('focus', () => { A.focused = true; });
+  input.addEventListener('blur', () => { A.focused = false; });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') askSend(L, o, input.value); });
+  box.append(el('div', { class: 'askrow' }, input, el('button', { class: 'btn primary', disabled: A.busy ? '' : null, onclick: () => askSend(L, o, input.value) }, A.busy ? '…' : 'Ask')));
+  if (A.focused) setTimeout(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+  return box;
+}
 
 // ---------- Course builder ----------
 // Build your own course by playing moves for both sides. Saved in localStorage `ot.customCourses`
