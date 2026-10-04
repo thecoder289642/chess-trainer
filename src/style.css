@@ -207,3 +207,21 @@ body.mode-overview .layout { grid-template-columns: 1fr; }
 .acct { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 6px; }
 .acct input { flex: 1; min-width: 150px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; font: inherit; }
 .welcome { border-color: rgba(127,176,105,.55); }
+
+/* Course builder */
+.buildcard { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.buildcard > div { flex: 1 1 220px; }
+.tag.mine { background: rgba(106,167,224,.16); color: #a9cbee; }
+.binput { width: 100%; box-sizing: border-box; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; color: var(--text); font: inherit; margin: 6px 0 2px; }
+.binput:focus { outline: none; border-color: var(--accent); }
+select.binput.small { width: auto; margin: 0; padding: 6px 8px; }
+.bside { margin: 8px 0; width: max-content; max-width: 100%; }
+.bside button[disabled] { opacity: .45; cursor: not-allowed; }
+.bpath { line-height: 1.45; overflow-wrap: anywhere; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.bline { align-items: center; padding: 0; }
+.bline.on { border-color: var(--accent); }
+.bopen { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 10px 12px; color: inherit; display: flex; flex-direction: column; gap: 2px; }
+.bopen small { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.bdel { background: none; border: 0; color: var(--muted); padding: 10px 12px; font-size: 14px; }
+.bdel:hover { color: #f0a49b; }

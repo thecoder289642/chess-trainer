@@ -56,6 +56,9 @@ let evalWhite = null;
 let myTree = null;
 let repTree = store.get('repTree', null);
 let repInfo = store.get('repInfo', null);
+let customCourses = store.get('customCourses', []);
+const courses = () => [...LESSONS, ...customCourses];
+const courseById = (id) => courses().find((x) => x.id === id);
 
 const engine = new Engine('stockfish-19-lite-single.js');
 const cache = new Map();
@@ -217,7 +220,7 @@ function playMove(move, by) {
 }
 
 async function onUserBoardMove(orig, dest) {
-  if (S.mode === 'learn') return lessonUserMove(orig, dest);
+  if (S.mode === 'learn') return learnView.screen === 'build' ? builderMove(orig, dest) : lessonUserMove(orig, dest);
   const before = game.fen();
   const piece = game.get(orig);
   const promo = piece && piece.type === 'p' && (dest[1] === '8' || dest[1] === '1') ? 'q' : undefined;
@@ -621,14 +624,14 @@ const masteredCount = (o) => o.lines.filter((_, i) => mastered(o, i)).length;
 const saveProgress = () => store.set('progress', progress);
 
 function setMode(m, initial) {
-  busy++; lesson = null; hideWarning(); cg.setAutoShapes([]);
+  busy++; lesson = null; builder = null; hideWarning(); cg.setAutoShapes([]);
   S.mode = m; saveSettings();
   if (m === 'overview') { game = new Chess(); moveNotes = []; renderAll(); window.scrollTo(0, 0); return; }
   if (m === 'learn') { learnView = { screen: 'home', id: null }; game = new Chess(); moveNotes = []; userColor = 'white'; syncBoard(); renderAll(); }
   else newGame({ drill });
 }
 
-function openOpening(id) { busy++; lesson = null; cg.setAutoShapes([]); learnView = { screen: 'opening', id }; const o = LESSONS.find((x) => x.id === id); userColor = o.side; game = new Chess(); moveNotes = []; syncBoard(); renderAll(); }
+function openOpening(id) { busy++; lesson = null; cg.setAutoShapes([]); learnView = { screen: 'opening', id }; const o = courseById(id); userColor = o.side; game = new Chess(); moveNotes = []; syncBoard(); renderAll(); }
 
 function pickPracticeLine(o) {
   const w = o.lines.map((_, i) => (mastered(o, i) ? 1 : 3) * (i === 0 ? 2 : 1) * (lesson && lesson.idx === i && o.lines.length > 1 ? 0.25 : 1));
@@ -710,7 +713,8 @@ function renderLearn() {
   const box = $('#learnPanel');
   box.innerHTML = '';
   if (learnView.screen === 'home') return renderLearnHome(box);
-  const o = LESSONS.find((x) => x.id === learnView.id);
+  if (learnView.screen === 'build') return renderBuilder(box);
+  const o = courseById(learnView.id);
   if (learnView.screen === 'opening') return renderOpening(box, o);
   return renderLesson(box, o);
 }
@@ -724,11 +728,15 @@ function renderLearnHome(box) {
   setStatusText('Pick an opening to learn');
   box.append(el('div', { class: 'card' }, el('div', { class: 'label' }, 'Learn an opening'),
     el('div', { class: 'muted' }, 'Each opening has a main line plus the deviations you’ll meet. Learn them with arrows, then practise from memory.')));
+  box.append(el('div', { class: 'card buildcard' },
+    el('div', {}, el('div', { class: 'label' }, 'Your own course'),
+      el('div', { class: 'muted' }, 'Play out the lines you actually play. Popular Lichess replies and engine moves are suggested, or let it auto-build the tree for you.')),
+    el('button', { class: 'btn primary', onclick: () => openBuilder() }, '+ Build a course')));
   for (const side of ['white', 'black']) {
     const list = el('div', { class: 'card olist' }, el('div', { class: 'label' }, side === 'white' ? 'As White' : 'As Black'));
-    for (const o of LESSONS.filter((x) => x.side === side)) {
+    for (const o of courses().filter((x) => x.side === side)) {
       list.append(el('button', { class: 'oitem', onclick: () => openOpening(o.id) },
-        el('div', { class: 'otop' }, el('b', {}, o.name), youPlay(o) ? el('span', { class: 'tag' }, 'You play this') : null),
+        el('div', { class: 'otop' }, el('b', {}, o.name), o.custom ? el('span', { class: 'tag mine' }, 'Your course') : youPlay(o) ? el('span', { class: 'tag' }, 'You play this') : null),
         el('small', {}, `${o.lines.length} lines · ${masteredCount(o)} mastered`), progressBar(o)));
     }
     box.append(list);
@@ -743,7 +751,10 @@ function renderOpening(box, o) {
     el('h2', { class: 'otitle' }, o.name), el('div', { class: 'muted' }, o.blurb), progressBar(o),
     el('div', { class: 'row gap' },
       el('button', { class: 'btn primary', onclick: () => startLine(o, first, 'learn') }, o.lines.every((_, i) => prog(o, i).seen) ? 'Review lines' : 'Learn'),
-      el('button', { class: 'btn', onclick: () => startLine(o, pickPracticeLine(o), 'practice') }, 'Practice (no hints)')));
+      el('button', { class: 'btn', onclick: () => startLine(o, pickPracticeLine(o), 'practice') }, 'Practice (no hints)')),
+    el('div', { class: 'row gap' }, o.custom
+      ? [el('button', { class: 'btn small', onclick: () => openBuilder(o.id) }, 'Edit course'), el('button', { class: 'btn small ghost', onclick: () => deleteCourse(o) }, 'Delete')]
+      : el('button', { class: 'btn small', onclick: () => openBuilder(null, o), title: 'Copy these lines into your own course and change them' }, 'Make my own version')));
   box.append(head);
   const list = el('div', { class: 'card' }, el('div', { class: 'label' }, 'Lines'));
   o.lines.forEach((l, i) => {
@@ -787,7 +798,8 @@ function renderLesson(box, o) {
     card.append(el('div', { class: 'row gap' },
       L.kind === 'learn' && nextIdx !== -1 ? el('button', { class: 'btn primary', onclick: () => startLine(o, nextIdx, 'learn') }, 'Next line: ' + o.lines[nextIdx].name) : null,
       el('button', { class: 'btn' + (L.kind === 'practice' || nextIdx === -1 ? ' primary' : ''), onclick: () => startLine(o, pickPracticeLine(o), 'practice') }, L.kind === 'practice' ? 'Next practice line' : 'Practice'),
-      el('button', { class: 'btn ghost', onclick: () => startLine(o, L.idx, L.kind) }, 'Repeat')));
+      el('button', { class: 'btn ghost', onclick: () => startLine(o, L.idx, L.kind) }, 'Repeat'),
+      el('button', { class: 'btn ghost', onclick: () => playOn(L.moves, o.side, `${o.name}: ${line.name}`), title: 'Keep playing this position against popular Lichess moves, then the engine' }, 'Play on from here')));
   } else {
     card.append(el('div', { class: 'row gap' },
       L.kind === 'practice' ? el('button', { class: 'btn small', onclick: lessonHint }, 'Hint') : null,
@@ -796,6 +808,308 @@ function renderLesson(box, o) {
   box.append(card);
 }
 
+
+// ---------- Course builder ----------
+// Build your own course by playing moves for both sides. Saved in localStorage `ot.customCourses`
+// in the same shape as LESSONS, so Learn / Practice / reviews work on it unchanged.
+let builder = null; // { id, name, side, lines: [{ name, moves, note }], path: [san], sugg, auto, dirty }
+const saveCustom = () => store.set('customCourses', customCourses);
+const plyLabel = (i, san) => `${Math.floor(i / 2) + 1}${i % 2 ? '...' : '.'}${san}`;
+
+function openBuilder(id, copyFrom) {
+  busy++; lesson = null; hideWarning();
+  const o = id ? customCourses.find((c) => c.id === id) : copyFrom;
+  builder = { id: id || null, name: id ? o.name : copyFrom ? 'My ' + copyFrom.name : '', side: o ? o.side : 'white',
+    lines: o ? o.lines.map((l) => ({ name: l.name, moves: l.moves, note: l.note || '' })) : [], path: [], sugg: null, auto: null, dirty: !!copyFrom };
+  learnView = { screen: 'build', id: null };
+  builderGoto([]);
+  window.scrollTo(0, 0);
+}
+
+// Your move per position and the replies already covered, for a set of lines.
+function courseTree(lines, side) {
+  const user = new Map(), opp = new Map();
+  for (const l of lines) {
+    const c = new Chess();
+    for (const m of l.moves.split(' ')) {
+      const k = fenKey(c.fen()); const mine = sideOf(c.fen()) === side;
+      let r; try { r = c.move(m); } catch { break; }
+      if (mine) { if (!user.has(k)) user.set(k, r); } else { if (!opp.has(k)) opp.set(k, new Set()); opp.get(k).add(r.san); }
+    }
+  }
+  return { user, opp };
+}
+
+function builderGoto(path) {
+  const B = builder;
+  B.path = path;
+  game = new Chess(); moveNotes = [];
+  for (const m of path) { game.move(m); moveNotes.push({ flag: null, by: sideOf(game.fen()) === B.side ? 'book' : 'user', notes: [] }); }
+  userColor = B.side;
+  builderSync(); renderAll();
+  loadBuilderSuggestions();
+}
+
+function builderSync() {
+  const B = builder;
+  const h = game.history({ verbose: true }); const last = h[h.length - 1]; const turn = sideOf(game.fen());
+  cg.set({ fen: game.fen(), turnColor: turn, orientation: B.side, check: game.inCheck() ? turn : false, lastMove: last ? [last.from, last.to] : undefined,
+    movable: { color: game.isGameOver() ? undefined : turn, dests: dests(game) } });
+  const yours = turn === B.side && courseTree(B.lines, B.side).user.get(fenKey(game.fen()));
+  cg.setAutoShapes(yours ? [{ orig: yours.from, dest: yours.to, brush: 'green' }] : []);
+}
+
+function builderMove(orig, dest) {
+  const piece = game.get(orig);
+  const promo = piece && piece.type === 'p' && (dest[1] === '8' || dest[1] === '1') ? 'q' : undefined;
+  let res = null; try { res = new Chess(game.fen()).move({ from: orig, to: dest, promotion: promo }); } catch {}
+  if (!res) { builderSync(); return; }
+  tick(!!res.captured);
+  builderGoto([...builder.path, res.san]);
+}
+
+function loadBuilderSuggestions() {
+  const B = builder; const fen = game.fen();
+  B.sugg = { fen, lichess: null, engine: null, err: null };
+  if (game.isGameOver()) return;
+  const live = () => builder === B && B.sugg.fen === fen && game.fen() === fen;
+  if (!S.token) B.sugg.err = new SourceError('Add your Lichess token in Settings to see popular moves', 'auth');
+  else getStats('lichess', fen).then((st) => { if (live()) { B.sugg.lichess = st; renderAll(); } })
+    .catch((e) => { if (live()) { B.sugg.err = e; renderAll(); } });
+  engine.topMoves(fen, { depth: 12, n: 3 }).then((r) => { if (live()) { B.sugg.engine = r; renderAll(); } })
+    .catch(() => { if (live()) { B.sugg.engine = []; renderAll(); } });
+}
+
+// Does line `l` play a different move than `path` does, in a position where it's your move?
+function conflictsWith(l, path, side) {
+  const mine = new Map(); const c = new Chess();
+  for (const m of path) { const k = fenKey(c.fen()); const isMine = sideOf(c.fen()) === side; const r = c.move(m); if (isMine) mine.set(k, r.san); }
+  const d = new Chess();
+  for (const m of l.moves.split(' ')) {
+    const k = fenKey(d.fen()); let r; try { r = d.move(m); } catch { return false; }
+    if (mine.has(k) && mine.get(k) !== r.san) return true;
+  }
+  return false;
+}
+
+// Removes lines that disagree with `path` about your move, after asking. Returns false if cancelled.
+function resolveConflicts(path, { quiet = false } = {}) {
+  const B = builder;
+  const bad = B.lines.filter((l) => conflictsWith(l, path, B.side));
+  if (!bad.length) return true;
+  if (quiet) return false;
+  const tree = courseTree(bad, B.side); const c = new Chess(); let msg = '';
+  for (const m of path) { const k = fenKey(c.fen()); const r = c.move(m); const was = tree.user.get(k); if (was && was.san !== r.san) { msg = `Your course plays ${was.san} here, not ${r.san}.`; break; } }
+  if (!confirm(`${msg} You can only have one move per position.\n\nReplace it? ${bad.length} line${bad.length > 1 ? 's' : ''} using the old move will be removed.`)) return false;
+  B.lines = B.lines.filter((l) => !bad.includes(l)); B.dirty = true;
+  return true;
+}
+
+function autoName(path) {
+  const B = builder;
+  if (!B.lines.length) return 'Main line';
+  let d = 0;
+  for (const l of B.lines) { const m = l.moves.split(' '); let i = 0; while (i < m.length && i < path.length && m[i] === path[i]) i++; d = Math.max(d, i); }
+  if (d >= path.length) d = path.length - 1;
+  return plyLabel(d, path[d]) + (path[d + 1] ? ' ' + plyLabel(d + 1, path[d + 1]) : '');
+}
+
+function builderSaveLine(path, name, note, { quiet = false } = {}) {
+  const B = builder; const moves = path.join(' ');
+  if (!path.length) return { skip: 'empty' };
+  if (B.lines.some((l) => l.moves === moves || l.moves.startsWith(moves + ' '))) { if (!quiet) toast('That line is already in the course'); return { skip: 'covered' }; }
+  if (!resolveConflicts(path, { quiet })) return { skip: 'conflict' };
+  // A shorter line this one extends is replaced by it (keeping its name).
+  const prefix = B.lines.find((l) => moves.startsWith(l.moves + ' '));
+  const line = { name: name || prefix?.name || autoName(path), moves, note: note || prefix?.note || '' };
+  if (prefix) B.lines[B.lines.indexOf(prefix)] = line; else B.lines.push(line);
+  B.dirty = true;
+  return { ok: true };
+}
+
+// Grows the tree from the current position: the most popular replies for your opponent
+// (Lichess at your rating, or the engine's top moves without a token) and the engine's best move for you.
+async function builderAuto(plies) {
+  const B = builder;
+  if (B.auto) return;
+  if (!resolveConflicts(B.path)) return;
+  const MAX = 12; const leaves = [];
+  const userPos = courseTree(B.lines, B.side).user;
+  { const c = new Chess(); for (const m of B.path) { const k = fenKey(c.fen()); const isMine = sideOf(c.fen()) === B.side; const r = c.move(m); if (isMine) userPos.set(k, r); } }
+  const say = (t) => { B.auto = t; if (builder === B) renderAll(); };
+  // Your move here: the course's, else the engine's best.
+  const yourMove = async (fen) => {
+    let san = userPos.get(fenKey(fen))?.san;
+    if (!san) {
+      const top = await engine.topMoves(fen, { depth: 13, n: 1 }).catch(() => []);
+      if (!top[0]) return null;
+      san = sanOf(fen, top[0].uci); userPos.set(fenKey(fen), { san });
+    }
+    return san;
+  };
+  // Their likely replies: popular at your rating, else the engine's near-equal top moves. [] = stop here.
+  const theirMoves = async (fen) => {
+    if (S.token) try {
+      const st = await getStats('lichess', fen);
+      if (st.total >= 30) return st.moves.filter((m) => m.n / st.total >= 0.12).sort((a, b) => b.n - a.n).slice(0, 3).map((m) => m.san);
+      if (st.total > 0) return []; // the book has run dry: end the line here
+    } catch {}
+    const top = await engine.topMoves(fen, { depth: 12, n: 3 }).catch(() => []);
+    return top.filter((t) => Math.abs(t.cp - top[0].cp) <= 70).map((t) => sanOf(fen, t.uci));
+  };
+  // Breadth-first, so the line budget is shared fairly between early branches.
+  let frontier = [[...B.path]];
+  for (let left = plies; left > 0 && frontier.length && builder === B; left--) {
+    const next = [];
+    for (let i = 0; i < frontier.length; i++) {
+      if (builder !== B) return;
+      const path = frontier[i];
+      const c = new Chess(); for (const m of path) c.move(m);
+      if (c.isGameOver()) { leaves.push(path); continue; }
+      say(`Exploring ${pgnText(path.join(' ')) || 'the start'}…`);
+      const fen = c.fen();
+      const sans = sideOf(fen) === B.side ? [await yourMove(fen)].filter(Boolean) : await theirMoves(fen);
+      const room = Math.max(1, MAX - leaves.length - next.length - (frontier.length - i - 1));
+      if (!sans.length) leaves.push(path);
+      else for (const san of sans.slice(0, room)) next.push([...path, san]);
+    }
+    frontier = next;
+  }
+  if (builder !== B) return;
+  leaves.push(...frontier);
+  let added = 0;
+  for (const p of leaves) if (builderSaveLine(p, '', '', { quiet: true }).ok) added++;
+  B.auto = null;
+  toast(added ? `Added ${added} line${added > 1 ? 's' : ''} — check them below` : 'No new lines found from here');
+  builderSync(); renderAll();
+}
+
+function builderSaveCourse() {
+  const B = builder;
+  if (!B.lines.length) { toast('Save at least one line first', 'warn'); return; }
+  const id = B.id || 'my-' + Date.now().toString(36);
+  const old = customCourses.find((c) => c.id === id);
+  const course = { id, name: (B.name || '').trim() || `My ${B.side} course`, side: B.side, tag: null, custom: true,
+    blurb: `Your own course: ${B.lines.length} line${B.lines.length > 1 ? 's' : ''}.`, lines: B.lines };
+  if (old && progress[id]) { // keep progress for lines that didn't change
+    const np = {}; B.lines.forEach((l, i) => { const j = old.lines.findIndex((x) => x.moves === l.moves); if (j !== -1 && progress[id][j]) np[i] = progress[id][j]; });
+    progress[id] = np; saveProgress();
+  }
+  customCourses = old ? customCourses.map((c) => (c.id === id ? course : c)) : [...customCourses, course];
+  saveCustom(); builder = null;
+  toast('Course saved');
+  openOpening(id);
+}
+
+function deleteCourse(o) {
+  if (!confirm(`Delete "${o.name}" and its progress?`)) return;
+  customCourses = customCourses.filter((c) => c.id !== o.id); saveCustom();
+  delete progress[o.id]; saveProgress();
+  learnView = { screen: 'home' }; renderAll();
+}
+
+function leaveBuilder() {
+  if (builder?.dirty && !confirm('Leave without saving the course?')) return;
+  const id = builder?.id; builder = null;
+  if (id) openOpening(id); else { learnView = { screen: 'home' }; game = new Chess(); moveNotes = []; syncBoard(); renderAll(); }
+}
+
+// Keep playing a position in Play mode: popular Lichess replies, then the engine.
+function playOn(moves, side, name) {
+  S.mode = 'play'; S.colorPref = side; saveSettings();
+  busy++; lesson = null; builder = null; cg.setAutoShapes([]);
+  newGame({ drill: { name, moves } });
+  window.scrollTo(0, 0);
+}
+
+function renderBuilder(box) {
+  const B = builder;
+  const turn = sideOf(game.fen()); const mine = turn === B.side;
+  const tree = courseTree(B.lines, B.side); const k = fenKey(game.fen());
+  const yours = mine ? tree.user.get(k) : null; const covered = !mine ? tree.opp.get(k) : null;
+  setStatusText(B.auto ? 'Auto-building…' : game.isGameOver() ? 'Game over' : mine ? 'Your move: what do you play here?' : 'Their move: what might they play?', mine ? 'you' : '');
+
+  const name = el('input', { type: 'text', class: 'binput', placeholder: 'Course name, e.g. My Scotch Gambit', value: B.name });
+  name.addEventListener('input', (e) => { B.name = e.target.value; B.dirty = true; });
+  box.append(el('div', { class: 'card' },
+    el('button', { class: 'back', onclick: leaveBuilder }, '← All openings'),
+    el('h2', { class: 'otitle' }, B.id ? 'Edit course' : 'Build a course'),
+    name,
+    el('div', { class: 'seg3 bside', role: 'group', 'aria-label': 'Your side' }, ...['white', 'black'].map((s) =>
+      el('button', { class: B.side === s ? 'on' : '', disabled: B.lines.length && B.side !== s ? '' : null, title: B.lines.length ? 'Remove all lines to change side' : '', onclick: () => { B.side = s; builderGoto(B.path); } }, `I play ${s}`))),
+    el('div', { class: 'muted' }, 'Move pieces for both sides on the board. Save each line you want to learn; the green arrow shows your course move.')));
+
+  // Position + suggestions
+  const pos = el('div', { class: 'card' },
+    el('div', { class: 'label' }, 'Position'),
+    el('div', { class: 'mono bpath' }, B.path.length ? pgnText(B.path.join(' ')) : 'Starting position'),
+    el('div', { class: 'row gap' },
+      el('button', { class: 'btn small', disabled: B.path.length ? null : '', onclick: () => builderGoto(B.path.slice(0, -1)) }, '◀ Back'),
+      el('button', { class: 'btn small ghost', disabled: B.path.length ? null : '', onclick: () => builderGoto([]) }, 'Start'),
+      el('button', { class: 'btn small ghost', disabled: B.path.length ? null : '', onclick: () => playOn(B.path, B.side, B.name || 'My course'), title: 'Play this position against popular Lichess moves, then the engine' }, 'Play from here')));
+  if (yours) pos.append(el('div', { class: 'lmsg info' }, `In your course you play ${yours.san} here.`));
+  if (covered?.size) pos.append(el('div', { class: 'muted' }, `Replies already in your course: ${[...covered].join(', ')}`));
+  const sg = B.sugg && B.sugg.fen === game.fen() ? B.sugg : null;
+  const play = (san) => { if (!B.auto) builderGoto([...B.path, san]); };
+  if (!game.isGameOver()) {
+    pos.append(el('div', { class: 'label sub' }, `Popular moves (Lichess ${S.ratings[0]}–${S.ratings[S.ratings.length - 1] + 200})`));
+    if (!sg || (!sg.lichess && !sg.err)) pos.append(el('div', { class: 'muted' }, 'Loading…'));
+    else if (sg.err) pos.append(el('div', { class: 'muted' }, sg.err.message), sg.err.kind === 'auth' ? el('button', { class: 'btn small', onclick: openSettings }, 'Open settings') : '');
+    else if (!sg.lichess.moves.length) pos.append(el('div', { class: 'muted' }, 'No games from this position.'));
+    else {
+      const st = sg.lichess; const tbl = el('div', { class: 'stbl' });
+      for (const m of [...st.moves].sort((a, b) => b.n - a.n).slice(0, 6)) {
+        tbl.append(el('div', { class: 'sr clickable', onclick: () => play(m.san), title: 'Play ' + m.san },
+          el('span', { class: 'san' }, m.san, yours?.san === m.san || covered?.has(m.san) ? ' ✓' : ''),
+          el('span', { class: 'cnt' }, `${Math.round((m.n / st.total) * 100)}%`, el('small', {}, fmt(m.n))), wdlBar(m)));
+      }
+      pos.append(tbl);
+    }
+    pos.append(el('div', { class: 'label sub' }, 'Engine (Stockfish)'));
+    if (!sg || !sg.engine) pos.append(el('div', { class: 'muted' }, 'Thinking…'));
+    else {
+      const row = el('div', { class: 'row gap' });
+      for (const t of sg.engine) {
+        const san = sanOf(game.fen(), t.uci);
+        const ev = t.mate !== null ? '#' + t.mate : (t.cp >= 0 ? '+' : '') + (t.cp / 100).toFixed(1);
+        row.append(el('button', { class: 'chip', onclick: () => play(san), title: 'Evaluation from White’s side' }, `${san}  ${ev}`));
+      }
+      pos.append(row);
+    }
+  }
+  box.append(pos);
+
+  // Save / auto-build
+  const lname = el('input', { type: 'text', class: 'binput', placeholder: B.path.length ? 'Line name: ' + autoName(B.path) : 'Line name' });
+  const lnote = el('input', { type: 'text', class: 'binput', placeholder: 'Note to show while learning (optional)' });
+  const depth = el('select', { class: 'binput small' }, ...[[6, 'next 3 moves'], [10, 'next 5 moves'], [14, 'next 7 moves']].map(([v, t]) => el('option', { value: v }, t)));
+  depth.value = '10';
+  const hasMine = B.path.some((_, i) => (i % 2 === 0) === (B.side === 'white'));
+  box.append(el('div', { class: 'card' },
+    el('div', { class: 'label' }, 'Add to course'),
+    lname, lnote,
+    el('div', { class: 'row gap' },
+      el('button', { class: 'btn primary', disabled: hasMine && !B.auto ? null : '', onclick: () => { if (builderSaveLine(B.path, lname.value.trim(), lnote.value.trim()).ok) { toast('Line saved'); builderSync(); renderAll(); } } }, 'Save this line'),
+      hasMine ? null : el('span', { class: 'muted' }, 'Play at least one of your moves first.')),
+    el('div', { class: 'label sub' }, 'Or let the computer build it'),
+    el('div', { class: 'muted' }, 'From this position: the most common replies at your rating (or the engine’s top moves), and the engine’s best move for you, up to 12 lines.'),
+    el('div', { class: 'row gap' }, depth,
+      el('button', { class: 'btn', disabled: B.auto ? '' : null, onclick: () => builderAuto(+depth.value) }, 'Auto-build from here')),
+    B.auto ? el('div', { class: 'lmsg info' }, B.auto) : null));
+
+  // Lines
+  const list = el('div', { class: 'card' }, el('div', { class: 'label' }, `Lines (${B.lines.length})`));
+  if (!B.lines.length) list.append(el('div', { class: 'muted' }, 'No lines yet. The first line you save is the main line.'));
+  B.lines.forEach((l, i) => {
+    list.append(el('div', { class: 'litem bline' + (i === 0 ? ' main' : '') + (l.moves === B.path.join(' ') ? ' on' : '') },
+      el('button', { class: 'bopen', onclick: () => builderGoto(l.moves.split(' ')), title: 'Show this line on the board' }, el('b', {}, l.name), el('small', {}, pgnText(l.moves))),
+      el('button', { class: 'bdel', title: 'Remove line', 'aria-label': 'Remove ' + l.name, onclick: () => { B.lines.splice(i, 1); B.dirty = true; builderSync(); renderAll(); } }, '✕')));
+  });
+  box.append(list);
+  box.append(el('div', { class: 'row gap' },
+    el('button', { class: 'btn primary', disabled: B.lines.length && !B.auto ? null : '', onclick: builderSaveCourse }, 'Save course'),
+    el('button', { class: 'btn ghost', onclick: leaveBuilder }, 'Cancel')));
+}
 
 // ---------- Overview ----------
 // An opening is "yours" if your own games follow its main line for a few moves.
@@ -814,7 +1128,7 @@ const intervalFor = (clean) => [0, 1, 3, 7, 14, 30][Math.min(clean, 5)] * DAY;
 function dueLines() {
   const out = [];
   const now = Date.now();
-  for (const o of LESSONS) o.lines.forEach((l, i) => {
+  for (const o of courses()) o.lines.forEach((l, i) => {
     const p = prog(o, i);
     if (p.seen && now - (p.last || 0) >= intervalFor(p.clean)) out.push({ o, i, p });
   });
@@ -845,7 +1159,7 @@ function coverFor(side) {
 }
 const COVER = {
   white: { label: 'When you play 1.e4, Black replies…', start: ['e4'], map: {
-    e5: ['scotch', 'italian'], c5: ['alapin'], e6: ['french-adv'], c6: ['caro-adv'], d5: ['scandi'], d6: ['vs-pirc'], g6: ['vs-pirc'], Nf6: ['alekhine'] },
+    e5: ['scotch', 'scotch-gambit', 'italian'], c5: ['alapin'], e6: ['french-adv'], c6: ['caro-adv'], d5: ['scandi'], d6: ['vs-pirc'], g6: ['vs-pirc'], Nf6: ['alekhine'] },
     names: { e5: '1...e5 (Open Game)', c5: '1...c5 Sicilian', e6: '1...e6 French', c6: '1...c6 Caro-Kann', d5: '1...d5 Scandinavian', d6: '1...d6 Pirc', g6: '1...g6 Modern', Nf6: '1...Nf6 Alekhine', Nc6: '1...Nc6 Nimzowitsch', b6: '1...b6 Owen', f5: '1...f5', a6: '1...a6', h6: '1...h6', d6x: '' } },
   black: { label: 'As Black, White opens with…', start: [], map: {
     e4: ['pirc'], d4: ['kid'], c4: ['flank'], Nf3: ['flank'] },
@@ -908,13 +1222,13 @@ function renderOverview() {
   if (!hasGames()) box.append(accountCard(true));
   // 1. Today
   const due = dueLines();
-  const started = LESSONS.filter((o) => o.lines.some((_, i) => prog(o, i).seen));
-  const totalLines = LESSONS.reduce((s, o) => s + o.lines.length, 0);
-  const mast = LESSONS.reduce((s, o) => s + masteredCount(o), 0);
+  const started = courses().filter((o) => o.lines.some((_, i) => prog(o, i).seen));
+  const totalLines = courses().reduce((s, o) => s + o.lines.length, 0);
+  const mast = courses().reduce((s, o) => s + masteredCount(o), 0);
   const today = el('div', { class: 'card span2 today' },
     el('div', {}, el('div', { class: 'label' }, 'Today'),
       el('div', { class: 'big' }, due.length ? `${due.length} line${due.length > 1 ? 's' : ''} to review` : started.length ? 'Nothing due — learn something new' : 'Start with an opening below'),
-      el('div', { class: 'muted' }, `${mast} of ${totalLines} lines mastered across ${LESSONS.length} openings. Lines come back for review after 1, 3, 7, 14 and 30 days.`)),
+      el('div', { class: 'muted' }, `${mast} of ${totalLines} lines mastered across ${courses().length} openings. Lines come back for review after 1, 3, 7, 14 and 30 days.`)),
     due.length ? el('button', { class: 'btn primary', onclick: practiceDue }, 'Practice due lines') : null);
   box.append(today);
   if (due.length) {
@@ -932,7 +1246,7 @@ function renderOverview() {
     const lc = ovLichess[side];
     const lcMap = lc ? new Map(lc.moves.map((m) => [m.san, m.n / lc.total])) : null;
     const sans = new Set([...Object.keys(cov.map), ...mine.keys(), ...(lc ? lc.moves.filter((m) => m.n / lc.total > 0.02).map((m) => m.san) : [])]);
-    const rows = [...sans].map((san) => ({ san, mine: mine.get(san), lc: lcMap?.get(san), courses: (cov.map[san] || []).map((id) => LESSONS.find((o) => o.id === id)) }))
+    const rows = [...sans].map((san) => ({ san, mine: mine.get(san), lc: lcMap?.get(san), courses: (cov.map[san] || []).map((id) => courseById(id)) }))
       .sort((a, b) => (b.lc ?? 0) - (a.lc ?? 0) || (b.mine?.n ?? 0) - (a.mine?.n ?? 0)).slice(0, 10);
     const card = el('div', { class: 'card' }, el('div', { class: 'label' }, cov.label));
     const tbl = el('div', { class: 'cov' });

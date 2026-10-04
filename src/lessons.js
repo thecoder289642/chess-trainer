@@ -14,6 +14,20 @@ export const LESSONS = [
     ],
   },
   {
+    id: 'scotch-gambit', name: 'Scotch Gambit (4.Bc4)', side: 'white', tag: null,
+    blurb: 'After 3...exd4, skip Nxd4 and play 4.Bc4: develop fast, aim at f7 and take the pawn back later.',
+    lines: [
+      { name: 'Main line: 4...Nf6 5.e5', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Nf6 e5 d5 Bb5 Ne4 Nxd4 Bd7 Bxc6 bxc6 O-O', note: 'e5 kicks the knight, ...d5 hits your bishop. Bb5 pins c6, then win the pawn back with Nxd4 and castle.' },
+      { name: '5...Ng4', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Nf6 e5 Ng4 O-O Be7 Bf4 f6 Re1', note: 'Just castle. Bf4 and Re1 hold e5; the g4 knight is offside and d4 falls later.' },
+      { name: '5...Ne4', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Nf6 e5 Ne4 Qe2 Nc5 O-O Be7 Rd1', note: 'Qe2 attacks the e4 knight. Castle and Rd1 to win back d4 with pressure on the d-file.' },
+      { name: '4...Bc5 5.c3 Nf6', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Bc5 c3 Nf6 e5 d5 Bb5 Ne4 cxd4 Bb6 Nc3 O-O Be3', note: 'Same e5 + Bb5 idea as the main line. cxd4 gives you a big centre; Nc3 challenges the e4 knight.' },
+      { name: '4...Bc5 5.c3 dxc3?! trap', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Bc5 c3 dxc3 Bxf7+ Kxf7 Qd5+ Kf8 Qxc5+ d6 Qxc3', note: 'Greedy ...dxc3 loses the c5 bishop: Bxf7+ then Qd5+ forks king and bishop.' },
+      { name: '4...Bb4+', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Bb4+ c3 dxc3 bxc3 Ba5 O-O Bb6 e5 Nge7 Ba3 O-O', note: 'Block with c3 and recapture with the b-pawn. Castle first, then e5 and Ba3 for strong pressure for the pawn.' },
+      { name: '4...d6', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 d6 Nxd4 Nf6 Nc3 Be7 O-O O-O h3', note: 'A quiet reply: just take d4 back. Develop, castle and h3 stops ...Bg4.' },
+      { name: '4...Be7', moves: 'e4 e5 Nf3 Nc6 d4 exd4 Bc4 Be7 Nxd4 d6 Nc3 Nf6 O-O O-O h3', note: 'Same plan: Nxd4, Nc3, castle. Transposes to the 4...d6 line.' },
+    ],
+  },
+  {
     id: 'italian', name: 'Italian Game', side: 'white', tag: null,
     blurb: 'Bc4 aims at f7. The slow c3 + d3 plan gives a solid, easy-to-play position.',
     lines: [

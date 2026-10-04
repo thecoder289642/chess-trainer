@@ -7,7 +7,7 @@ const { Chess } = require('chess.js');
   engine.listener = (l) => onLine(l);
   function onLine(l) { const m = l.match(/score cp (-?\d+)/); const mt = l.match(/score mate (-?\d+)/); if (m) lastScore = +m[1]; if (mt) lastScore = +mt[1] > 0 ? 5000 : -5000; if (l.startsWith('bestmove') && waiter) { const w = waiter; waiter = null; w(lastScore); } }
   const evalFen = (fen) => new Promise((r) => { waiter = r; engine.sendCommand('position fen ' + fen); engine.sendCommand('go depth 14'); });
-  for (const o of LESSONS) for (const l of o.lines) {
+  for (const o of LESSONS.filter((x) => !process.env.ONLY || x.id === process.env.ONLY)) for (const l of o.lines) {
     const c = new Chess(); const bad = [];
     for (const m of l.moves.split(' ')) {
       const mover = c.turn() === 'w' ? 'white' : 'black';

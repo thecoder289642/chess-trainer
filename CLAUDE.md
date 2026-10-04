@@ -18,13 +18,13 @@ src/engine.js    Stockfish web-worker wrapper (UCI, promise queue)
 src/style.css    styles (imports chessground CSS from node_modules)
 scripts/build.mjs        esbuild bundle -> app.js/app.css at root, copies stockfish, bumps sw.js cache version
 scripts/check-lessons.mjs  validates every lesson line is legal + your moves are consistent per position
-scripts/sf-check.cjs       Stockfish sanity check of every lesson line (flags user moves that drop >=0.9 pawns)
+scripts/sf-check.cjs       Stockfish sanity check of every lesson line (flags user moves that drop >=0.9 pawns); ONLY=<id> checks one course
 ```
 Everything is FLAT at the root (no `engine/` or `icons/` folders). Paths in code are relative (`stockfish-19-lite-single.js`, `icon-192.png`).
 
 ## Commands
 - `npm install` then `npm run build` after any change in `src/`. Always commit the rebuilt `app.js`, `app.css`, `sw.js`.
-- `npm run check` after editing `src/lessons.js` (must print ALL OK). `npm run check:engine` for a slower Stockfish check.
+- `npm run check` after editing `src/lessons.js` (must print ALL OK). `npm run check:engine` for a slower Stockfish check (`ONLY=scotch-gambit npm run check:engine` for one course).
 - `npm run serve` -> http://localhost:8000 to test locally.
 
 ## How it works
@@ -32,6 +32,8 @@ Everything is FLAT at the root (no `engine/` or `icons/` folders). Paths in code
 - Modes:
   - **Overview**: welcome/account card if no games loaded; "Today" spaced-repetition reviews (1/3/7/14/30 days); coverage tables (opponent replies vs your first move as White, and White's first moves vs you as Black) with Lichess frequency, your games + score, and course buttons; "Weak spots" = positions from your games with n>=8 and score <45%, with a Train button (jumps to Play from that position).
   - **Learn**: courses from `src/lessons.js`. "Learn" = guided with arrows; "Practice" = from memory, wrong moves are taken back, arrow after 2 misses. Progress in localStorage `ot.progress` {openingId: {lineIdx: {seen, clean, tries, last}}}. "You play this" tag is computed from the user's games (`youPlay()`).
+  - **Course builder** (Learn → "+ Build a course", "Make my own version" on a built-in course, "Edit course" on a custom one): play both sides on the board; suggestions are popular Lichess moves (token needed) and Stockfish top 3 (`engine.topMoves`, MultiPV). "Auto-build" expands breadth-first from the current position, up to 12 lines: opponent = Lichess replies with >=12% share (else engine moves within 0.7 pawns of the best), you = existing course move or engine best. One user move per position is enforced (conflicting lines are replaced after a confirm). Custom courses live in localStorage `ot.customCourses` in the LESSONS shape with `custom: true`; `courses()` = LESSONS + custom everywhere.
+  - "Play on from here" (end of a lesson line) / "Play from here" (builder) switch to Play with that line as the start.
   - **Play**: free play / start from an opening. Opponent replies weighted by popularity from a source: Lichess explorer (rating + speed filters), Masters, My games, or a pasted PGN repertoire. When the book ends, Stockfish plays at a set Elo. Moves are flagged as rare / weak / mistake / blunder (explorer stats + engine). Eval bar is off by default (setting).
 - Personal data: games are fetched in the browser and stored only in localStorage (`ot.myTrees`, `ot.gamesMeta`), auto-refreshed daily. Settings in `ot.settings`.
 
